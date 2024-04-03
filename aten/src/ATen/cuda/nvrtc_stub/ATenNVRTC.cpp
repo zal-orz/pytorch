@@ -7,6 +7,7 @@ NVRTC* load_nvrtc() {
   auto self = new NVRTC();
 #define CREATE_ASSIGN(name) self->name = name;
   AT_FORALL_NVRTC(CREATE_ASSIGN)
+  // self->cuLaunchKernel = nullptr;
   return self;
 }
 

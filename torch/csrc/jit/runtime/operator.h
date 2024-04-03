@@ -126,7 +126,8 @@ struct TORCH_API Operator {
           return op.op_.fold<Operation>(
               [](const Operation& op) { return op; },
               [node](const OperationCreator& op_creator) {
-                return op_creator(node);
+                auto tmp = op_creator(node);
+                return tmp;
               });
         });
   }

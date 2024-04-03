@@ -461,6 +461,7 @@ std::vector<at::Tensor> FusionExecutor::runFusion(
   }
 
   {
+    assert(at::globalContext().getNVRTC().cuLaunchKernel == nullptr);
     FUSER_PERF_SCOPE("cuLaunchKernel");
     AT_CUDA_DRIVER_CHECK(at::globalContext().getNVRTC().cuLaunchKernel(
         compiled_kernel_.function,

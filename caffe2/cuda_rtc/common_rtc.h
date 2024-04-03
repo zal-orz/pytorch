@@ -81,6 +81,7 @@ class CudaRTCFunction {
     CAFFE_ENFORCE(
         module_loaded_, "Cannot call Launch before a module is loaded.");
     void * args_voidp[] = {&args...};
+    assert(0);
     CUDA_DRIVERAPI_ENFORCE(cuLaunchKernel(
         kernel_, gx, gy, gz, bx, by, bz, shared_mem, stream, args_voidp, 0));
   }
@@ -91,6 +92,7 @@ class CudaRTCFunction {
                 void** extra) {
     CAFFE_ENFORCE(
         module_loaded_, "Cannot call Launch before a module is loaded.");
+    assert(0);
     CUDA_DRIVERAPI_ENFORCE(cuLaunchKernel(
         kernel_, gx, gy, gz, bx, by, bz, shared_mem, stream, nullptr, extra));
   }

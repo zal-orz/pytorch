@@ -618,6 +618,10 @@ Block::Block(Graph* graph_, Node* node_)
   input_->prev() = output_;
   output_->next() = input_;
   output_->prev() = input_;
+// graph_->dump();
+// assert(0);
+std:
+  // std::cout << "creating block" << std::endl;
 
   graph_->all_blocks.emplace(this);
   output_->owning_block_ = this;

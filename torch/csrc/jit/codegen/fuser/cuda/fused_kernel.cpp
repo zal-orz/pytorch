@@ -190,6 +190,7 @@ void FusedKernelCUDA::launch_raw(
   }
 
   // Launches kernel on current stream (device was set by executor)
+  assert(nvrtc().cuLaunchKernel == nullptr);
   auto stream = at::cuda::getCurrentCUDAStream();
   AT_CUDA_DRIVER_CHECK(nvrtc().cuLaunchKernel(
       function_,

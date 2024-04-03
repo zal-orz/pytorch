@@ -1035,7 +1035,7 @@ struct Graph {
         current_scope_(std::move(scope_root)),
         block_(new Block(this, nullptr)),
         insert_before_(return_node()) {
-    std::cout << "graph:graph" << std::endl;
+    // std::cout << "graph:graph" << std::endl;
   }
 
   Graph() : Graph(c10::make_intrusive<Scope>()) {}

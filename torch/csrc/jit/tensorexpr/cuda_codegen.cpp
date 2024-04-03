@@ -1120,6 +1120,7 @@ void CudaCodeGen::call(const std::vector<CallArg>& args) {
   }
   // Launch the kernels
   auto stream = at::cuda::getCurrentCUDAStream();
+  assert(0);
   AT_CUDA_DRIVER_CHECK(nvrtc().cuLaunchKernel(
       function_,
       gpu_block_extents_v[0],
