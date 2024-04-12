@@ -496,6 +496,23 @@ ExecutionPlan ProfilingGraphExecutorImpl::getPlanFor(
     runProfilingInsensitiveOptimizations(copy);
     pr_ = ProfilingRecord::instrumentGraph(copy);
     GRAPH_DUMP("Profiled Graph: ", pr_->graph());
+
+#include <fstream>
+    std::ofstream file("/home/zal/pytorch/de/node_info.txt");
+    auto graph = pr_->graph();
+    for (const auto& node : graph->nodes()) {
+      file << "Node name: " << node->kind().toQualString() << std::endl;
+      file << "Inputs:" << std::endl;
+      for (const auto& input : node->inputs()) {
+        file << input->debugName() << std::endl;
+      }
+      file << "Outputs:" << std::endl;
+      for (const auto& output : node->outputs()) {
+        file << output->debugName() << std::endl;
+      }
+    }
+    file.close();
+
     profiling_plan_ = ExecutionPlan(pr_->graph(), function_name_);
     // fall-through
   }

@@ -241,7 +241,8 @@ add_custom_command(
     "${TORCH_ROOT}"
 )
 
-add_library(torch_python SHARED ${TORCH_PYTHON_SRCS})
+file(GLOB TORCH_MORI_SRCS "${TORCH_SRC_DIR}/csrc/mori/*.hpp" "${TORCH_SRC_DIR}/csrc/mori/*.cc")
+add_library(torch_python SHARED ${TORCH_PYTHON_SRCS} ${TORCH_MORI_SRCS})
 if(HAVE_SOVERSION)
   set_target_properties(torch_python PROPERTIES
       VERSION ${TORCH_VERSION} SOVERSION ${TORCH_SOVERSION})

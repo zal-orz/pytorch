@@ -474,6 +474,7 @@ std::pair<std::shared_ptr<TracingState>, Stack> trace(
     }
     FixupTraceScopeBlocks(graph, self);
     NormalizeOps(graph);
+    /*
     for (const auto& node : graph->nodes()) {
       std::cout << "Node name: " << node->kind().toQualString() << std::endl;
       std::cout << "Inputs:" << std::endl;
@@ -485,6 +486,7 @@ std::pair<std::shared_ptr<TracingState>, Stack> trace(
         std::cout << output->debugName() << std::endl;
       }
     }
+    */
     return {state, out_stack};
   } catch (...) {
     tracer::abandon();
