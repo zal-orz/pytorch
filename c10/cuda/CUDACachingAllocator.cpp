@@ -922,7 +922,8 @@ struct CudaCachingAllocator : public Allocator {
       return {r, r, &uncached_delete, Device(DeviceType::CUDA, device)};
     }
     if (size != 0) {
-      caching_allocator.malloc(&r, device, size, cuda::getCurrentCUDAStream(device));
+      caching_allocator.malloc(
+          &r, device, size, cuda::getCurrentCUDAStream(device));
     }
     return {r, r, &raw_delete, Device(DeviceType::CUDA, device)};
   }

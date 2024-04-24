@@ -34,14 +34,13 @@ Node name: prim::Constant
 Inputs:
 Outputs:
 10
-Node name: prim::GetAttr
+Node name: prim::Constant
 Inputs:
-self.1
 Outputs:
 11
 Node name: prim::GetAttr
 Inputs:
-self.1
+self
 Outputs:
 12
 Node name: prim::GetAttr
@@ -111,216 +110,180 @@ Outputs:
 25
 Node name: prim::GetAttr
 Inputs:
-25
+13
 Outputs:
 26
 Node name: prim::GetAttr
 Inputs:
-25
+13
 Outputs:
 27
-Node name: aten::_convolution
+Node name: aten::conv2d
 Inputs:
-input.1
-27
+x.1
 26
+27
 5
 5
 5
 7
-4
-6
-7
-7
-8
-8
-Outputs:
-input.2
-Node name: aten::relu_
-Inputs:
-input.2
-Outputs:
-input.3
-Node name: prim::GetAttr
-Inputs:
-24
-Outputs:
-30
-Node name: prim::GetAttr
-Inputs:
-24
-Outputs:
-31
-Node name: aten::_convolution
-Inputs:
-input.3
-31
-30
-5
-5
-5
-7
-4
-6
-7
-7
-8
-8
 Outputs:
 input.4
 Node name: aten::relu_
 Inputs:
 input.4
 Outputs:
-input.5
-Node name: aten::max_pool2d
-Inputs:
-input.5
-3
-3
-4
-5
-7
-Outputs:
 input.6
 Node name: prim::GetAttr
 Inputs:
-23
+14
 Outputs:
-35
+30
 Node name: prim::GetAttr
 Inputs:
-23
+14
 Outputs:
-36
-Node name: aten::_convolution
+31
+Node name: aten::conv2d
 Inputs:
 input.6
-36
-35
+30
+31
 5
 5
 5
 7
-4
-6
-7
-7
-8
-8
-Outputs:
-input.7
-Node name: aten::relu_
-Inputs:
-input.7
 Outputs:
 input.8
-Node name: prim::GetAttr
-Inputs:
-22
-Outputs:
-39
-Node name: prim::GetAttr
-Inputs:
-22
-Outputs:
-40
-Node name: aten::_convolution
-Inputs:
-input.8
-40
-39
-5
-5
-5
-7
-4
-6
-7
-7
-8
-8
-Outputs:
-input.9
 Node name: aten::relu_
 Inputs:
-input.9
+input.8
 Outputs:
 input.10
 Node name: aten::max_pool2d
 Inputs:
 input.10
-3
-3
 4
-5
-7
-Outputs:
-input.11
-Node name: prim::GetAttr
-Inputs:
-21
-Outputs:
-44
-Node name: prim::GetAttr
-Inputs:
-21
-Outputs:
-45
-Node name: aten::_convolution
-Inputs:
-input.11
-45
-44
-5
-5
-5
-7
 4
-6
-7
-7
-8
+3
+5
 8
 Outputs:
 input.12
-Node name: aten::relu_
+Node name: prim::GetAttr
+Inputs:
+15
+Outputs:
+35
+Node name: prim::GetAttr
+Inputs:
+15
+Outputs:
+36
+Node name: aten::conv2d
 Inputs:
 input.12
-Outputs:
-input.13
-Node name: prim::GetAttr
-Inputs:
-20
-Outputs:
-48
-Node name: prim::GetAttr
-Inputs:
-20
-Outputs:
-49
-Node name: aten::_convolution
-Inputs:
-input.13
-49
-48
+35
+36
 5
 5
 5
 7
-4
-6
-7
-7
-8
-8
 Outputs:
 input.14
 Node name: aten::relu_
 Inputs:
 input.14
 Outputs:
-input.15
+input.16
+Node name: prim::GetAttr
+Inputs:
+16
+Outputs:
+39
+Node name: prim::GetAttr
+Inputs:
+16
+Outputs:
+40
+Node name: aten::conv2d
+Inputs:
+input.16
+39
+40
+5
+5
+5
+7
+Outputs:
+input.17
+Node name: aten::relu_
+Inputs:
+input.17
+Outputs:
+input.19
+Node name: aten::max_pool2d
+Inputs:
+input.19
+4
+4
+3
+5
+8
+Outputs:
+input.21
+Node name: prim::GetAttr
+Inputs:
+17
+Outputs:
+44
+Node name: prim::GetAttr
+Inputs:
+17
+Outputs:
+45
+Node name: aten::conv2d
+Inputs:
+input.21
+44
+45
+5
+5
+5
+7
+Outputs:
+input.23
+Node name: aten::relu_
+Inputs:
+input.23
+Outputs:
+input.25
+Node name: prim::GetAttr
+Inputs:
+18
+Outputs:
+48
+Node name: prim::GetAttr
+Inputs:
+18
+Outputs:
+49
+Node name: aten::conv2d
+Inputs:
+input.25
+48
+49
+5
+5
+5
+7
+Outputs:
+input.27
+Node name: aten::relu_
+Inputs:
+input.27
+Outputs:
+input.29
 Node name: prim::GetAttr
 Inputs:
 19
@@ -331,476 +294,408 @@ Inputs:
 19
 Outputs:
 53
-Node name: aten::_convolution
+Node name: aten::conv2d
 Inputs:
-input.15
-53
+input.29
 52
+53
 5
 5
 5
 7
-4
-6
-7
-7
-8
-8
 Outputs:
-input.16
+input.31
 Node name: aten::relu_
 Inputs:
-input.16
+input.31
 Outputs:
-input.17
+input.33
 Node name: aten::max_pool2d
 Inputs:
-input.17
-3
-3
+input.33
 4
+4
+3
 5
-7
+8
 Outputs:
-input.18
+input.35
 Node name: prim::GetAttr
 Inputs:
-18
+20
 Outputs:
 57
 Node name: prim::GetAttr
 Inputs:
-18
+20
 Outputs:
 58
-Node name: aten::_convolution
+Node name: aten::conv2d
 Inputs:
-input.18
-58
+input.35
 57
+58
 5
 5
 5
 7
-4
-6
-7
-7
-8
-8
 Outputs:
-input.19
+input.37
 Node name: aten::relu_
 Inputs:
-input.19
+input.37
 Outputs:
-input.20
+input.39
 Node name: prim::GetAttr
 Inputs:
-17
+21
 Outputs:
 61
 Node name: prim::GetAttr
 Inputs:
-17
+21
 Outputs:
 62
-Node name: aten::_convolution
+Node name: aten::conv2d
 Inputs:
-input.20
-62
+input.39
 61
+62
 5
 5
 5
 7
-4
-6
-7
-7
-8
-8
 Outputs:
-input.21
+input.41
 Node name: aten::relu_
 Inputs:
-input.21
+input.41
 Outputs:
-input.22
+input.43
 Node name: prim::GetAttr
 Inputs:
-16
+22
 Outputs:
 65
 Node name: prim::GetAttr
 Inputs:
-16
+22
 Outputs:
 66
-Node name: aten::_convolution
+Node name: aten::conv2d
 Inputs:
-input.22
-66
+input.43
 65
+66
 5
 5
 5
 7
-4
-6
-7
-7
-8
-8
 Outputs:
-input.23
+input.45
 Node name: aten::relu_
 Inputs:
-input.23
+input.45
 Outputs:
-input.24
+input.47
 Node name: aten::max_pool2d
 Inputs:
-input.24
-3
-3
+input.47
 4
+4
+3
 5
-7
+8
 Outputs:
-input.25
+input.49
 Node name: prim::GetAttr
 Inputs:
-15
+23
 Outputs:
 70
 Node name: prim::GetAttr
 Inputs:
-15
+23
 Outputs:
 71
-Node name: aten::_convolution
+Node name: aten::conv2d
 Inputs:
-input.25
-71
+input.49
 70
+71
 5
 5
 5
 7
-4
-6
-7
-7
-8
-8
 Outputs:
-input.26
+input.51
 Node name: aten::relu_
 Inputs:
-input.26
+input.51
 Outputs:
-input.27
+input.53
 Node name: prim::GetAttr
 Inputs:
-14
+24
 Outputs:
 74
 Node name: prim::GetAttr
 Inputs:
-14
+24
 Outputs:
 75
-Node name: aten::_convolution
+Node name: aten::conv2d
 Inputs:
-input.27
-75
+input.53
 74
+75
 5
 5
 5
 7
-4
-6
-7
-7
-8
-8
 Outputs:
-input.28
+input.55
 Node name: aten::relu_
 Inputs:
-input.28
+input.55
 Outputs:
-input.29
+input.57
 Node name: prim::GetAttr
 Inputs:
-13
+25
 Outputs:
 78
 Node name: prim::GetAttr
 Inputs:
-13
+25
 Outputs:
 79
-Node name: aten::_convolution
+Node name: aten::conv2d
 Inputs:
-input.29
-79
+input.57
 78
+79
 5
 5
 5
 7
-4
-6
-7
-7
-8
-8
 Outputs:
-input.30
+input.59
 Node name: aten::relu_
 Inputs:
-input.30
+input.59
 Outputs:
-input.31
+input.61
 Node name: aten::max_pool2d
 Inputs:
-input.31
-3
-3
+input.61
 4
+4
+3
 5
-7
+8
 Outputs:
-input.32
-Node name: aten::adaptive_avg_pool2d
+x.3
+Node name: prim::profile
 Inputs:
-input.32
-2
+x.3
 Outputs:
-x
-Node name: aten::flatten
+133
+Node name: aten::size
 Inputs:
-x
-6
+133
+Outputs:
+83
+Node name: aten::len
+Inputs:
+83
+Outputs:
+84
+Node name: aten::gt
+Inputs:
+84
 9
 Outputs:
-input.33
-Node name: prim::GetAttr
-Inputs:
-11
-Outputs:
 85
-Node name: prim::GetAttr
+Node name: prim::If
 Inputs:
-11
+85
 Outputs:
-86
-Node name: prim::GetAttr
+Node name: aten::adaptive_avg_pool2d
 Inputs:
-11
+x.3
+2
 Outputs:
-87
+x.5
+Node name: aten::flatten
+Inputs:
+x.5
+7
+6
+Outputs:
+x.7
 Node name: prim::GetAttr
 Inputs:
-87
+self
 Outputs:
 88
 Node name: prim::GetAttr
 Inputs:
-87
+88
 Outputs:
 89
-Node name: prim::profile
-Inputs:
-89
-Outputs:
-107
-Node name: aten::t
-Inputs:
-107
-Outputs:
-90
-Node name: prim::profile
-Inputs:
-input.33
-Outputs:
-108
-Node name: prim::profile
-Inputs:
-90
-Outputs:
-109
-Node name: aten::mm
-Inputs:
-108
-109
-Outputs:
-91
-Node name: prim::profile
+Node name: prim::GetAttr
 Inputs:
 88
 Outputs:
-110
+90
+Node name: prim::GetAttr
+Inputs:
+88
+Outputs:
+91
+Node name: prim::GetAttr
+Inputs:
+88
+Outputs:
+92
+Node name: prim::GetAttr
+Inputs:
+88
+Outputs:
+93
+Node name: prim::GetAttr
+Inputs:
+89
+Outputs:
+94
+Node name: prim::GetAttr
+Inputs:
+89
+Outputs:
+95
 Node name: prim::profile
+Inputs:
+x.7
+Outputs:
+134
+Node name: aten::dim
+Inputs:
+134
+Outputs:
+96
+Node name: aten::eq
+Inputs:
+96
+9
+Outputs:
+97
+Node name: prim::If
+Inputs:
+97
+Outputs:
+input.3
+Node name: aten::relu_
+Inputs:
+input.3
+Outputs:
+input.5
+Node name: prim::GetAttr
+Inputs:
+90
+Outputs:
+106
+Node name: aten::dropout
+Inputs:
+input.5
+11
+106
+Outputs:
+input.7
+Node name: prim::GetAttr
 Inputs:
 91
 Outputs:
-111
-Node name: aten::add
+108
+Node name: prim::GetAttr
+Inputs:
+91
+Outputs:
+109
+Node name: prim::profile
+Inputs:
+input.7
+Outputs:
+143
+Node name: aten::dim
+Inputs:
+143
+Outputs:
+110
+Node name: aten::eq
 Inputs:
 110
+9
+Outputs:
 111
-6
-Outputs:
-92
-Node name: prim::profile
+Node name: prim::If
 Inputs:
-92
+111
 Outputs:
-112
+input.9
 Node name: aten::relu_
 Inputs:
-112
+input.9
 Outputs:
-input.35
-Node name: aten::dropout
-Inputs:
-input.35
-10
-7
-Outputs:
-input.36
+input.11
 Node name: prim::GetAttr
 Inputs:
-86
-Outputs:
-95
-Node name: prim::GetAttr
-Inputs:
-86
-Outputs:
-96
-Node name: prim::profile
-Inputs:
-96
-Outputs:
-113
-Node name: aten::t
-Inputs:
-113
-Outputs:
-97
-Node name: prim::profile
-Inputs:
-input.36
-Outputs:
-114
-Node name: prim::profile
-Inputs:
-97
-Outputs:
-115
-Node name: aten::mm
-Inputs:
-114
-115
-Outputs:
-98
-Node name: prim::profile
-Inputs:
-95
-Outputs:
-116
-Node name: prim::profile
-Inputs:
-98
-Outputs:
-117
-Node name: aten::add
-Inputs:
-116
-117
-6
-Outputs:
-99
-Node name: prim::profile
-Inputs:
-99
-Outputs:
-118
-Node name: aten::relu_
-Inputs:
-118
-Outputs:
-input.38
-Node name: aten::dropout
-Inputs:
-input.38
-10
-7
-Outputs:
-input
-Node name: prim::GetAttr
-Inputs:
-85
-Outputs:
-102
-Node name: prim::GetAttr
-Inputs:
-85
-Outputs:
-103
-Node name: prim::profile
-Inputs:
-103
-Outputs:
-119
-Node name: aten::t
-Inputs:
-119
-Outputs:
-104
-Node name: prim::profile
-Inputs:
-input
+92
 Outputs:
 120
-Node name: prim::profile
+Node name: aten::dropout
 Inputs:
-104
-Outputs:
-121
-Node name: aten::mm
-Inputs:
+input.11
+11
 120
-121
 Outputs:
-105
-Node name: prim::profile
+input.13
+Node name: prim::GetAttr
 Inputs:
-102
+93
 Outputs:
 122
-Node name: prim::profile
+Node name: prim::GetAttr
 Inputs:
-105
+93
 Outputs:
 123
-Node name: aten::add
-Inputs:
-122
-123
-6
-Outputs:
-106
 Node name: prim::profile
 Inputs:
-106
+input.13
+Outputs:
+152
+Node name: aten::dim
+Inputs:
+152
 Outputs:
 124
+Node name: aten::eq
+Inputs:
+124
+9
+Outputs:
+125
+Node name: prim::If
+Inputs:
+125
+Outputs:
+x.9
+Node name: prim::profile
+Inputs:
+x.9
+Outputs:
+161
 Node name: prim::profile
 Inputs:
 Outputs:

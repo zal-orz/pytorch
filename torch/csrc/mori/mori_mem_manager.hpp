@@ -14,6 +14,10 @@
 
 #define MORI_HOST_MEM_ALIGN_SIZE 512
 
+inline static void* AddressOffset(void* address, size_t size) {
+  return (uint8_t*)address + size;
+}
+
 namespace torch {
 
 struct PytorchMemoryManager : public mori::MemoryManager {
@@ -34,7 +38,8 @@ struct PytorchMemoryManager : public mori::MemoryManager {
 
   std::shared_mutex hm;
 
-  void* stream;
+  // void* stream;
+  CUstream stream;
   void* event;
 
  protected:
@@ -61,15 +66,15 @@ struct PytorchMemoryManager : public mori::MemoryManager {
     void* host_address = nullptr;
     // size_t size = device::gpu::CudaDriver::total_mem_size() << 2;
     size_t size;
-    if (cudaMemGetInfo(_, &size) != cudaSuccess) {
+    size_t free;
+    if (cudaMemGetInfo(&free, &size) != cudaSuccess) {
       std::cout << "Getting CUDA memory information failed." << std::endl;
       return;
     }
     size = size << 2;
     // if (device::gpu::CudaDriver::AllocHostPinnedMem(size, &host_address)==0)
     //   return;
-    if (cudaMallocHost(&host_address, size, cudaHostAllocDefault) !=
-        cudaSuccess) {
+    if (cudaMallocHost(&host_address, size) != cudaSuccess) {
       std::cout << "Allocating host memory failed." << std::endl;
       return;
     }
@@ -91,7 +96,7 @@ struct PytorchMemoryManager : public mori::MemoryManager {
 
   virtual void* allocateDevice(size_t size) override {
     // return memory_manager->MallocMemFromMemPool(size);
-    return memory_manager->raw_alloc(size);
+    return memory_manager->raw_allocate(size);
   }
 
   virtual void* allocateHost(size_t size) override {
@@ -136,11 +141,15 @@ struct PytorchMemoryManager : public mori::MemoryManager {
       MS_EXCEPTION(DeviceProcessError)
           << "Copy in CUDA memcpy failed: Stream synchronization failed.";
     }*/
-    cudaError_t err = cudaMemcpyAsync(
-        device_address, host_address, size, cudaMemcpyHostToDevice, stream);
-    if (err != cudaSuccess) {
-      std::cout << "Copy in CUDA memcpy failed" << std::endl;
-      return;
+cudaError_t err = cudaMemcpyAsync(
+    device_address,
+    host_address,
+    size,
+    cudaMemcpyHostToDevice,
+    stream);
+if (err != cudaSuccess) {
+  std::cout << "Copy in CUDA memcpy failed" << std::endl;
+  return;
     }
     err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {
@@ -179,7 +188,7 @@ struct PytorchMemoryManager : public mori::MemoryManager {
   }
 
   virtual void freeDevice(void* address) override {
-    memory_manager->raw_delete(address);
+    memory_manager->raw_deallocate(address);
   }
 
   virtual void freeHost(void* address) {
@@ -187,8 +196,8 @@ struct PytorchMemoryManager : public mori::MemoryManager {
 
     auto p = hosts.find(address);
     if (p == hosts.end() || !p->second.allocated)
-      MS_LOG(EXCEPTION) << "Find the host memory is not used, address["
-                        << address << "].";
+      std::cout << "Find the host memory is not used, address[" << address
+                << "]." << std::endl;
     p->second.allocated = false;
 
     void* free_mem_address = address;
@@ -250,24 +259,25 @@ struct PytorchMemoryManager : public mori::MemoryManager {
 
   virtual void* split(void* address, size_t size) override {
     // return memory_manager->Split(address, size);
-    return void * ();
+    return nullptr;
   }
   virtual void* salloc(void* address, size_t size) override {
     // return memory_manager->Salloc(address, size);
-    return void * ();
+    return nullptr;
   }
   virtual bool merge(void* left, void* right) override {
     // return memory_manager->Merge(left, right);
-    return void * ();
+    return false;
   }
 
+  /******************************************************/
   virtual mori::MemoryInfo getMemoryInfo() const override {
     size_t device_size = 1024 * 8;
     size_t host_size = 32768;
     device_size *= 1048576;
     host_size *= 1048576;
-
     auto re = mori::create_default_memory_info(device_size, host_size);
+    /*
     auto common = memory_manager->GetCommonMemInfo();
     auto persistent = memory_manager->GetPersistentMemInfo();
     auto transient = memory_manager->GetTransientMemInfo();
@@ -280,10 +290,15 @@ struct PytorchMemoryManager : public mori::MemoryManager {
     re.device.persistent_block.size = persistent.second;
     re.device.transient_block.address = transient.first;
     re.device.transient_block.size = transient.second;
+    */
+    re.device.total_size = re.device.common_block.size +
+        re.device.persistent_block.size + re.device.transient_block.size +
+        re.device.reserved_size;
+
     return re;
   }
 
-  virtual ~MindSporeMemoryManager() {
+  virtual ~PytorchMemoryManager() {
     assert(hosts.begin() != hosts.end());
     // device::gpu::CudaDriver::FreeHostPinnedMem(hosts.begin()->first);
     cudaError_t err = cudaFreeHost(hosts.begin()->first);
@@ -293,7 +308,8 @@ struct PytorchMemoryManager : public mori::MemoryManager {
     }
     // device::gpu::GPUDeviceManager::GetInstance().DestroyStream(&stream);
   }
+  }
+  ; // struct MindSporeMemoryManager
 
-}; // struct MindSporeMemoryManager
-
-} // namespace torch
+  } // namespace torch
+  

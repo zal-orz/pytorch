@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * libMori
+ * Copyright Xin 2022-2023.
+ */
+
 #include <cassert>
 #include <chrono>
 #include <sstream>
@@ -7,13 +12,16 @@
 
 namespace mori {
 
-enum class ApplicationStage {
+enum struct ApplicationStage {
   all,
   forward,
-  backward
-}; // enum class ApplicationStage
+  backward,
+  update
+}; // enum struct ApplicationStage
 
-namespace util {
+enum struct Direction { prev, post }; // enum struct Direction
+
+namespace utils {
 
 static std::string get_application_stage_str(ApplicationStage stage) {
   switch (stage) {
@@ -23,17 +31,243 @@ static std::string get_application_stage_str(ApplicationStage stage) {
       return "forward";
     case ApplicationStage::backward:
       return "backward";
+    case ApplicationStage::update:
+      return "update";
   }
   return "";
 }
 
-} // namespace util
+} // namespace utils
+} // namespace mori
+
+#include <chrono>
+#include <cmath>
+#include <sstream>
+#include <string>
+
+namespace mori {
+namespace utils {
+
+static long get_timestamp_val(
+    const std::chrono::steady_clock::time_point& timestamp) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             timestamp.time_since_epoch())
+      .count();
+}
+
+inline static void* address_offset(void* address, size_t size) {
+  return (uint8_t*)address + size;
+}
+
+inline static size_t address_distance(void* dst, void* src) {
+  return (uint8_t*)dst - (uint8_t*)src;
+}
+
+// inline static size_t get_memory_block(void* address, size_t size) {
+//     return reinterpret_cast<size_t>(address) / size;
+// }
+
+// inline static void* get_block_base_address(size_t block, size_t size) {
+//     return reinterpret_cast<void*>(block * size);
+// }
+
+inline static size_t get_memory_aligned_size(size_t size, size_t alignment) {
+  if (size == 0)
+    return 0;
+  return ((size - 1) / alignment + 1) * alignment;
+}
+
+inline static bool memory_address_aligned(void* address, size_t alignment) {
+  return (reinterpret_cast<size_t>(address) % alignment) == 0;
+}
+
+inline static std::string make_pointer_string_hex(void* address) {
+  std::stringstream ss;
+  ss << std::hex << reinterpret_cast<size_t>(address);
+  return ss.str();
+}
+
+} // namespace utils
+} // namespace mori
+
+#include <iostream>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
+#include <unordered_map>
+
+namespace mori {
+
+/**
+ * LogLevel
+ * Describe the level of the log.
+ */
+enum struct LogLevel { debug, info, warning, error }; // enum struct LogLevel
+
+static std::string get_log_level_str(LogLevel level) {
+  switch (level) {
+    case LogLevel::debug:
+      return "[Debug]  ";
+    case LogLevel::warning:
+      return "[Warning]";
+    case LogLevel::error:
+      return "[Error]  ";
+    default:
+      // info
+      return "[Info]   ";
+  }
+}
+
+/**
+ * Logger
+ * Basic logger interface
+ */
+struct Logger {
+ protected:
+  typedef Logger& (*func)(Logger&);
+
+ protected:
+  std::unordered_map<std::thread::id, LogLevel> default_levels;
+  std::unordered_map<std::thread::id, std::ostringstream> sls;
+  mutable std::shared_mutex dm;
+  mutable std::shared_mutex tm;
+
+  std::ostringstream sg;
+  mutable std::mutex sm;
+
+  template <typename T>
+  void submitInternal(const T& info) {
+    std::shared_lock<std::shared_mutex> l{tm};
+    auto p = sls.find(std::this_thread::get_id());
+    if (p == sls.end()) {
+      l.unlock();
+      std::unique_lock<std::shared_mutex> lu{tm};
+      p = sls.emplace(std::this_thread::get_id(), "").first;
+      lu.unlock();
+      l.lock();
+    }
+
+    auto& sl = p->second;
+    l.unlock();
+    sl << info;
+  }
+
+  virtual void log(LogLevel level, const std::string& log) {}
+
+ public:
+  inline void setDefaultLogLevel(LogLevel level) {
+    std::shared_lock<std::shared_mutex> l{dm};
+    auto p = default_levels.find(std::this_thread::get_id());
+    if (p == default_levels.end()) {
+      l.unlock();
+      std::unique_lock<std::shared_mutex> lu{dm};
+      p = default_levels.emplace(std::this_thread::get_id(), level).first;
+      lu.unlock();
+      l.lock();
+    }
+    default_levels.at(std::this_thread::get_id()) = level;
+  }
+  inline LogLevel getDefaultLogLevel() const {
+    std::shared_lock<std::shared_mutex> l{dm};
+    auto p = default_levels.find(std::this_thread::get_id());
+    if (p == default_levels.end())
+      return LogLevel::debug;
+    return p->second;
+  }
+
+  void flush(LogLevel level) {
+    std::unique_lock<std::mutex> ls{sm};
+
+    std::shared_lock<std::shared_mutex> lt{tm};
+    auto& sl = sls[std::this_thread::get_id()];
+    lt.unlock();
+
+    sg << get_log_level_str(level) << " "
+       << std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count()
+       << " " << sl.str();
+    sg.flush();
+    std::string entry = sg.str();
+    sg.str("");
+    ls.unlock();
+
+    log(level, entry);
+    sl.str("");
+  }
+  void flush() {
+    flush(getDefaultLogLevel());
+  }
+
+  template <typename T>
+  void submit(LogLevel level, const T& entry) {
+    submitInternal(entry);
+    flush(level);
+  };
+  template <typename T>
+  inline void submit(const T& entry) {
+    submit(getDefaultLogLevel(), entry);
+  }
+
+  Logger& operator<<(LogLevel level) {
+    setDefaultLogLevel(level);
+    return *this;
+  }
+  Logger& operator<<(func _func) {
+    return _func(*this);
+  }
+  template <typename T>
+  Logger& operator<<(const T& info) {
+    submitInternal(info);
+    return *this;
+  }
+
+  void clear() {
+    std::unique_lock<std::mutex> ls{sm};
+    sg.str("");
+    ls.unlock();
+
+    std::unique_lock<std::shared_mutex> lt{tm};
+    sls.clear();
+    lt.unlock();
+  }
+
+}; // struct Logger
+
+static Logger& endl(Logger& logger) {
+  logger.flush();
+  return logger;
+}
+
+/**
+ * StdIOLogger
+ * Submit logs to std streams
+ */
+struct StdIOLogger : public Logger {
+ protected:
+  virtual void log(LogLevel level, const std::string& entry) override {
+    switch (level) {
+      case LogLevel::warning:
+        std::clog << entry << std::endl;
+        break;
+      case LogLevel::error:
+        std::cerr << entry << std::endl;
+        break;
+      default:
+        // debug, info
+        std::cout << entry << std::endl;
+        break;
+    }
+  }
+
+}; // struct StdIOLogger
+
 } // namespace mori
 
 namespace mori {
 namespace events {
 
-enum class MemoryEventType {
+enum struct MemoryEventType {
   allocate,
   write,
   read,
@@ -42,9 +276,9 @@ enum class MemoryEventType {
   swapout,
   free,
   reshape
-}; // enum MemoryEventType
+}; // enum struct MemoryEventType
 
-namespace util {
+namespace utils {
 static std::string get_event_type_str(MemoryEventType type) {
   switch (type) {
     case MemoryEventType::allocate:
@@ -68,14 +302,7 @@ static std::string get_event_type_str(MemoryEventType type) {
   assert(0);
   return "";
 }
-
-static long get_timestamp_val(
-    const std::chrono::steady_clock::time_point& timestamp) {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-             timestamp.time_since_epoch())
-      .count();
-}
-} // namespace util
+} // namespace utils
 
 struct MemoryEvent final {
   std::string op;
@@ -132,94 +359,184 @@ struct MemoryEvent final {
 
   operator std::string() const {
     std::stringstream ss;
-    ss << "Timestamp: " << util::get_timestamp_val(timestamp)
+    ss << "Timestamp: " << mori::utils::get_timestamp_val(timestamp)
        << " operator: " << op << " tensor: " << tensor << " size: " << size
-       << " type: " << util::get_event_type_str(type)
-       << " stage: " << mori::util::get_application_stage_str(stage);
+       << " type: " << utils::get_event_type_str(type)
+       << " stage: " << mori::utils::get_application_stage_str(stage);
     return ss.str();
   }
 
 }; // struct MemoryEvents
 
+static Logger& operator<<(Logger& logger, const MemoryEvent& event) {
+  logger << static_cast<std::string>(event);
+  return logger;
+}
+
 } // namespace events
 } // namespace mori
 
+#include <chrono>
+#include <string>
+
+namespace mori {
+namespace events {
+
+enum struct ExecutionEventType {
+  request,
+  release,
+  execution
+}; // enum struct ExecutionEventType
+
+namespace utils {
+static std::string get_event_type_str(ExecutionEventType type) {
+  switch (type) {
+    case ExecutionEventType::request:
+      return "request";
+    case ExecutionEventType::release:
+      return "release";
+    default:
+      return "execution";
+  }
+}
+} // namespace utils
+
+struct ExecutionEvent {
+  std::string op;
+  ExecutionEventType type;
+  ApplicationStage stage;
+  std::chrono::steady_clock::time_point timestamp;
+
+  ExecutionEvent() {
+    op = "";
+    type = ExecutionEventType::execution;
+    stage = ApplicationStage::all;
+    timestamp = std::chrono::steady_clock::now();
+  }
+
+  ExecutionEvent(
+      const std::string& _op,
+      ExecutionEventType _type,
+      ApplicationStage _stage,
+      const std::chrono::steady_clock::time_point& _timestamp) {
+    op = _op;
+    type = _type;
+    stage = _stage;
+    timestamp = _timestamp;
+  }
+
+  ExecutionEvent(
+      const std::string& _op,
+      ExecutionEventType _type,
+      ApplicationStage _stage) {
+    op = _op;
+    type = _type;
+    stage = _stage;
+    timestamp = std::chrono::steady_clock::now();
+  }
+
+  ExecutionEvent(const ExecutionEvent& event) = default;
+  ExecutionEvent& operator=(const ExecutionEvent& event) = default;
+
+  bool operator<(const ExecutionEvent& event) const {
+    return timestamp < event.timestamp;
+  }
+
+  operator std::string() const {
+    std::stringstream ss;
+    ss << "Timestamp: " << mori::utils::get_timestamp_val(timestamp)
+       << " operator: " << op << " type: " << utils::get_event_type_str(type)
+       << " stage: " << mori::utils::get_application_stage_str(stage);
+    return ss.str();
+  }
+}; // struct ExecutionEvent
+
+static Logger& operator<<(Logger& logger, const ExecutionEvent& event) {
+  logger << static_cast<std::string>(event);
+  return logger;
+}
+
+} // namespace events
+} // namespace mori
+
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include <map>
+#include <set>
+#include <shared_mutex>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+#include <string>
+
 namespace mori {
 
-struct backend_exception : public std::exception {
-  backend_exception() = default;
-  backend_exception(const backend_exception& exception) = default;
+struct PerfModel {
+  size_t read_speed;
+  size_t write_speed;
+}; // struct PerfModel
 
-  backend_exception& operator=(const backend_exception& exception) = default;
-  virtual const char* what() const throw() {
-    return "Backend exception.";
-  }
+// static PerfModel create_gpu_performance_model() {
+//     return PerfModel(12288, 12288);
+// }
+// static PerfModel create_cpu_performance_model() {
+//     return PerfModel(65536, 65536);
+// }
+// static PerfModel create_nvm_performance_model() {
+//     // CPU memory is not a limitor of memory swapping. The current spped is
+//     set to 64 GB/s. return PerfModel{40960, 20480};
+// }
+// static PerfModel create_nvme_performance_model() {
+//     return PerfModel{2560, 2048};
+// }
 
-  virtual ~backend_exception() = default;
-}; // struct backend_exception
+struct MemoryInfo {
+ public:
+  struct Block {
+    void* address = nullptr;
+    size_t size = 0;
+  }; // inner struct Block
 
-struct dynamic_library_exception : public backend_exception {
- protected:
-  std::string reason;
+  struct Device {
+    std::string type;
+
+    Block common_block;
+    Block persistent_block;
+    Block transient_block;
+
+    size_t total_size = 512;
+    size_t align_size = 512;
+    size_t reserved_size = 0;
+  }; // inner struct Device
+
+  struct Host {
+    std::string type;
+    size_t total_size;
+  }; // innter struct Host
 
  public:
-  dynamic_library_exception(const std::string _reason) : reason(_reason) {}
-  dynamic_library_exception(const dynamic_library_exception& exception) =
-      default;
+  Device device;
+  Host host;
+}; // struct MemoryInfo
 
-  dynamic_library_exception& operator=(
-      const dynamic_library_exception& exception) = default;
-  virtual const char* what() const throw() {
-    return reason.c_str();
-  }
-
-  virtual ~dynamic_library_exception() = default;
-}; // struct dynamic_library_exception
+static MemoryInfo create_default_memory_info(size_t device, size_t host) {
+  MemoryInfo re;
+  re.device.type = "gpu";
+  re.device.total_size = device;
+  re.device.align_size = 256; // 256 B
+  re.host.type = "cpu";
+  re.host.total_size = host;
+  return re;
+}
 
 } // namespace mori
 
 #include <string>
-
-#include <cmath>
-#include <sstream>
-
-namespace mori {
-namespace utils {
-
-inline static void* address_offset(void* address, size_t size) {
-  return (uint8_t*)address + size;
-}
-
-// inline static size_t get_memory_block(void* address, size_t size) {
-//     return reinterpret_cast<size_t>(address) / size;
-// }
-
-// inline static void* get_block_base_address(size_t block, size_t size) {
-//     return reinterpret_cast<void*>(block * size);
-// }
-
-inline static size_t get_memory_aligned_size(size_t size, size_t alignment) {
-  if (size == 0)
-    return 0;
-  return ((size - 1) / alignment + 1) * alignment;
-}
-
-inline static bool memory_address_aligned(void* address, size_t alignment) {
-  return (reinterpret_cast<size_t>(address) % alignment) == 0;
-}
-
-inline static std::string make_pointer_string_hex(void* address) {
-  std::stringstream ss;
-  ss << std::hex << reinterpret_cast<size_t>(address);
-  return ss.str();
-}
-
-} // namespace utils
-} // namespace mori
 
 namespace mori {
 
@@ -318,6 +635,10 @@ struct memory_operation_invalid : public memory_exception {
 
 struct memory_unmanaged : public memory_exception {}; // struct memory_unmanaged
 
+struct memory_address_invalid : public memory_exception {
+
+}; // struct memory_address_invalid
+
 } // namespace mori
 
 namespace mori {
@@ -356,203 +677,7 @@ struct inited_exception : public status_exception {
 } // namespace mori
 
 namespace mori {
-
-struct context_exception : public std::exception {
-  context_exception() = default;
-  context_exception(const context_exception& exception) = default;
-
-  context_exception& operator=(const context_exception& exception) = default;
-  virtual const char* what() const throw() {
-    return "Context exception.";
-  }
-}; // struct status_exception
-
-struct context_missing : public context_exception {
- protected:
-  std::string reason = "Context missing: ";
-
- public:
-  context_missing(const std::string& parameter) {
-    reason += parameter;
-  }
-  context_missing(const context_missing& exception) = default;
-
-  context_missing& operator=(const context_missing& exception) = default;
-  virtual const char* what() const throw() {
-    return reason.c_str();
-  }
-
-  ~context_missing() = default;
-}; // struct context_missing
-
-struct context_invalid : public context_exception {
- protected:
-  std::string reason = "Context invalid: ";
-
- public:
-  context_invalid(const std::string& parameter) {
-    reason += parameter;
-  }
-  context_invalid(const context_invalid& exception) = default;
-
-  context_invalid& operator=(const context_invalid& exception) = default;
-  virtual const char* what() const throw() {
-    return reason.c_str();
-  }
-
-  ~context_invalid() = default;
-}; // struct context_invalid
-
-} // namespace mori
-
-namespace mori {
-namespace status {
-
-struct memory_status_exception : public std::exception {
- protected:
-  std::string reason = "Memory status exception.";
-
- public:
-  memory_status_exception() = default;
-  memory_status_exception(const std::string& _reason) : reason(_reason) {}
-  memory_status_exception(const memory_status_exception&) = default;
-  memory_status_exception& operator=(const memory_status_exception&) = default;
-
-  virtual const char* what() const noexcept override {
-    return reason.c_str();
-  }
-
-  virtual ~memory_status_exception() = default;
-}; // struct memory_status_exception
-
-struct tensor_invalid : public memory_status_exception {
-  tensor_invalid() {
-    reason = "Tensor status invalid.";
-  }
-  tensor_invalid(const std::string& _reason)
-      : memory_status_exception(_reason) {}
-}; // struct tensor_invalid
-
-struct memory_section_invalid : public memory_status_exception {
-  memory_section_invalid() {
-    reason = "Memory section status invalid.";
-  }
-  memory_section_invalid(const std::string& _reason)
-      : memory_status_exception(_reason) {}
-}; // struct memory_section_invalid
-
-struct memory_section_nonexist : public memory_status_exception {
-  memory_section_nonexist() {
-    reason = "Memory section not exist.";
-  }
-  memory_section_nonexist(const std::string& _reason)
-      : memory_status_exception(_reason) {}
-}; // struct memory_section_nonexist
-
-} // namespace status
-} // namespace mori
-
-namespace mori {
-
-struct event_exception : public std::exception {
-  event_exception() = default;
-  event_exception(const event_exception& exception) = default;
-
-  event_exception& operator=(const event_exception& exception) = default;
-  virtual const char* what() const throw() {
-    return "Event exception.";
-  }
-
-  virtual ~event_exception() = default;
-}; // struct event_exception
-
-struct event_conflict : public event_exception {
- protected:
-  std::string reason;
-
- public:
-  event_conflict(const std::string _reason) : reason(_reason) {}
-  event_conflict(const event_conflict& exception) = default;
-
-  event_conflict& operator=(const event_conflict& exception) = default;
-  virtual const char* what() const throw() {
-    return reason.c_str();
-  }
-
-  virtual ~event_conflict() = default;
-}; // struct event_conflict
-
-} // namespace mori
-
-#include <map>
-#include <shared_mutex>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
-
-#include <string>
-
-namespace mori {
-
-struct PerfModel {
-  size_t read_speed;
-  size_t write_speed;
-}; // struct PerfModel
-
-// static PerfModel create_gpu_performance_model() {
-//     return PerfModel(12288, 12288);
-// }
-// static PerfModel create_cpu_performance_model() {
-//     return PerfModel(65536, 65536);
-// }
-// static PerfModel create_nvm_performance_model() {
-//     // CPU memory is not a limitor of memory swapping. The current spped is
-//     set to 64 GB/s. return PerfModel{40960, 20480};
-// }
-// static PerfModel create_nvme_performance_model() {
-//     return PerfModel{2560, 2048};
-// }
-
-struct MemoryInfo {
- public:
-  struct Device {
-    std::string type;
-    size_t total_size;
-
-    size_t block_size;
-
-    size_t align_size;
-  }; // inner struct Device
-
-  struct Host {
-    std::string type;
-    size_t total_size;
-  }; // innter struct Host
-
- public:
-  Device device;
-  Host host;
-}; // struct MemoryInfo
-
-static MemoryInfo create_default_memory_info(size_t device, size_t host) {
-  MemoryInfo re;
-  re.device.type = "gpu";
-  re.device.total_size = device;
-  re.device.block_size = 1048576;
-  re.device.block_size *= 1024; // 1 GB
-  re.device.align_size = 512; // 512 B
-  re.host.type = "cpu";
-  re.host.total_size = host;
-  return re;
-}
-
-} // namespace mori
-
-namespace mori {
-namespace decisions {
-struct Model;
-} // namespace decisions
+namespace layout {
 
 struct Region final {
   std::string name;
@@ -603,43 +728,33 @@ struct Layer final {
   }
 }; // struct Layer
 
-/**
- * Describe the layout for all tensors in the memory.
- */
-struct MemoryMap final {
- private:
-  friend struct decisions::Model;
+struct MemoryMap;
 
- private:
+struct MemoryMapBuilder final {
   std::unordered_map<std::string, Region> regions;
   std::vector<Layer> layers;
 
-  size_t memory_size = 0;
+  MemoryInfo memory_info;
 
   int current_layer = 0;
 
- public:
-  MemoryMap() {
+  MemoryMapBuilder() {
     layers.emplace_back();
   }
 
-  inline void setMemorySize(size_t _size) {
-    memory_size = _size;
-    layers[0].size = _size;
+  inline void setMemoryInfo(const MemoryInfo& _memory_info) {
+    if (layers.size() != 1 || !layers[0].regions.empty())
+      throw inited_exception("Memory map on built.");
+    memory_info = _memory_info;
+    layers[0].size = _memory_info.device.common_block.size;
   }
-  inline size_t getMemorySize() {
-    return memory_size;
-  }
+  inline const MemoryInfo& getMemoryInfo() const noexcept {
+    return memory_info;
+  };
 
   inline void createLayer() {
-    layers.emplace_back(memory_size);
+    layers.emplace_back(memory_info.device.common_block.size);
     ++current_layer;
-  }
-  inline Layer& referenceLayer(int _layer) {
-    return layers[_layer];
-  }
-  inline Layer& referenceLayer() {
-    return referenceLayer(current_layer);
   }
 
   inline void submitMemoryRegion(int _layer, const Region& _region) {
@@ -662,11 +777,101 @@ struct MemoryMap final {
   inline Layer& getCurrentLayer() {
     return getLayer(current_layer);
   }
-  inline std::vector<size_t> getSections(const std::string& tensor) const {
+  inline const Layer& getCurrentLayer() const {
+    return getLayer(current_layer);
+  }
+  inline std::vector<Layer>& getLayers() {
+    return layers;
+  }
+  inline const std::vector<Layer>& getLayers() const {
+    return layers;
+  }
+  inline const std::vector<size_t>& getSections(
+      const std::string& tensor) const {
     return regions.at(tensor).sections;
   }
   inline size_t getFragmentSize(const std::string& tensor) const {
     return regions.at(tensor).fragment_size;
+  }
+  inline std::unordered_map<std::string, Region>& getRegions() {
+    return regions;
+  }
+  inline const std::unordered_map<std::string, Region>& getRegions() const {
+    return regions;
+  }
+
+  std::unordered_map<std::string, size_t> getFragmentInfo() const {
+    std::unordered_map<std::string, size_t> re;
+    for (auto& x : regions) {
+      if (x.second.fragment_size != 0)
+        re.emplace(x.first, x.second.fragment_size);
+    }
+    return re;
+  }
+
+  inline MemoryMap build();
+
+  void clear() {
+    regions.clear();
+    layers.clear();
+  }
+}; // struct MemoryMapBuilder
+
+/**
+ * Describe the layout for all tensors in the memory.
+ */
+struct MemoryMap {
+ private:
+  std::unordered_map<std::string, Region> regions;
+  std::vector<Layer> layers;
+
+  MemoryInfo memory_info;
+
+  int current_layer = 0;
+
+ public:
+  MemoryMap() = default;
+  MemoryMap(const MemoryMapBuilder& builder)
+      : regions(builder.regions),
+        layers(builder.layers),
+        memory_info(builder.memory_info),
+        current_layer(builder.current_layer) {}
+
+  inline const MemoryInfo& getMemoryInfo() const noexcept {
+    return memory_info;
+  };
+
+  inline const Layer& referenceLayer(int _layer) const {
+    return layers.at(_layer);
+  }
+  inline const Layer& referenceLayer() const {
+    return referenceLayer(current_layer);
+  }
+  inline const Region& referenceRegion(const std::string& _region) const {
+    return regions.at(_region);
+  }
+
+  inline int getLayersCount() const {
+    return layers.size();
+  }
+  inline const Layer& getLayer(int layer) const {
+    return layers[layer];
+  }
+  inline const Layer& getCurrentLayer() const {
+    return getLayer(current_layer);
+  }
+  inline const std::vector<Layer>& getLayers() const {
+    return layers;
+  }
+  inline const std::vector<size_t>& getSections(
+      const std::string& tensor) const {
+    return regions.at(tensor).sections;
+  }
+  inline size_t getFragmentSize(const std::string& tensor) const {
+    return regions.at(tensor).fragment_size;
+  }
+  inline const std::unordered_map<std::string, Region>& getRegions() const {
+    return regions;
   }
 
   std::unordered_map<std::string, size_t> getFragmentInfo() const {
@@ -684,104 +889,193 @@ struct MemoryMap final {
   }
 }; // struct MemoryMap
 
-namespace layout {
+MemoryMap MemoryMapBuilder::build() {
+  return MemoryMap(*this);
+}
 
-struct MemorySection final {
+enum struct MemoryBlockType {
+  common,
+  persistent,
+  transient
+}; // enum struct MemoryBlockType
+
+struct MemoryRegion final {
   std::string name = ""; // Tensor information
 
   void* address = nullptr;
   size_t size = 0;
 
   bool allocated = false;
-}; // struct MemorySection
+}; // struct MemoryRegion
 
 struct Block final {
-  std::map<void*, MemorySection> sections;
+  MemoryBlockType type;
+  std::map<void*, MemoryRegion> regions;
+  mutable std::shared_mutex m;
+  size_t total_size;
 
-  Block(void* address, size_t size) {
-    MemorySection s;
+  Block(MemoryBlockType block_type, void* address, size_t size) {
+    type = block_type;
+    total_size = size;
+    MemoryRegion s;
     s.address = address;
     s.size = size;
-    sections.emplace(s.address, s);
+    regions.emplace(s.address, s);
+  }
+  Block(const Block& block) {
+    type = block.type;
+    regions = block.regions;
+    total_size = block.total_size;
+  }
+  Block(Block&& block) {
+    type = block.type;
+    regions = std::move(block.regions);
+    total_size = block.total_size;
   }
 }; // struct Block
 
+struct MemoryDefragmentationExecutor;
+
 struct MemoryLayout final {
  private:
+  friend struct MemoryDefragmentationExecutor;
+
+ private:
   std::map<void*, Block> blocks;
+  // std::shared_mutex m;
 
-  std::shared_mutex m;
-
-  size_t device_size;
-  size_t block_size;
   size_t align_size;
 
  protected:
+  inline std::map<void*, Block>::const_iterator locateMemoryBlock(
+      void* address) const {
+    auto bp = blocks.upper_bound(address);
+    if (bp == blocks.begin())
+      return blocks.cend();
+    return std::prev(bp);
+  }
   inline std::map<void*, Block>::iterator locateMemoryBlock(void* address) {
     auto bp = blocks.upper_bound(address);
     if (bp == blocks.begin())
       return blocks.end();
-    return --bp;
+    return std::prev(bp);
   }
 
  public:
   MemoryLayout() = default;
 
   inline void setMemoryInfo(const MemoryInfo& info) {
-    device_size = info.device.total_size;
-    block_size = info.device.block_size;
+    assert(blocks.empty());
+
+    blocks.emplace(
+        info.device.common_block.address,
+        Block(
+            MemoryBlockType::common,
+            info.device.common_block.address,
+            info.device.common_block.size));
+    blocks.emplace(
+        info.device.persistent_block.address,
+        Block(
+            MemoryBlockType::persistent,
+            info.device.persistent_block.address,
+            info.device.persistent_block.size));
+    blocks.emplace(
+        info.device.transient_block.address,
+        Block(
+            MemoryBlockType::transient,
+            info.device.transient_block.address,
+            info.device.transient_block.size));
+
     align_size = info.device.align_size;
   }
 
-  inline bool isSectionExist(void* address) {
-    std::shared_lock<std::shared_mutex> l{m};
+  bool isRegionExist(void* address, Direction direction = Direction::post)
+      const {
+    if (address == nullptr)
+      throw memory_address_invalid();
     auto bp = locateMemoryBlock(address);
     if (bp == blocks.end())
       return false;
-    auto& sections = bp->second.sections;
-    return sections.find(address) != sections.end();
+    std::shared_lock<std::shared_mutex> l{bp->second.m};
+    auto& regions = bp->second.regions;
+    if (direction == Direction::post)
+      return regions.find(address) != regions.end();
+    else
+      return regions.find(address) != regions.begin();
   }
-  inline MemorySection getMemorySection(void* address) {
-    std::shared_lock<std::shared_mutex> l{m};
+  MemoryRegion getMemoryRegion(
+      void* address,
+      Direction direction = Direction::post) const {
+    if (address == nullptr)
+      throw memory_address_invalid();
     auto bp = locateMemoryBlock(address);
     if (bp == blocks.end())
       throw memory_unmanaged();
-    auto& sections = bp->second.sections;
-    auto sp = sections.find(address);
-    if (sp == sections.end())
-      throw memory_unmanaged();
-    return sp->second;
+    std::shared_lock<std::shared_mutex> l{bp->second.m};
+    auto& regions = bp->second.regions;
+    auto sp = regions.find(address);
+    if (direction == Direction::post) {
+      if (sp == regions.end())
+        throw memory_unmanaged();
+      return sp->second;
+    } else {
+      if (sp == regions.begin())
+        throw memory_unmanaged();
+      return std::prev(sp)->second;
+    }
   }
 
-  inline void recordMemoryAllocateEvent(
+  bool isPersistent(void* address) const {
+    if (address == nullptr)
+      throw memory_address_invalid();
+    auto bp = locateMemoryBlock(address);
+    if (bp == blocks.end())
+      throw memory_unmanaged();
+    std::shared_lock<std::shared_mutex> l{bp->second.m};
+    return bp->second.type == MemoryBlockType::persistent;
+  }
+  bool isTransient(void* address) const {
+    if (address == nullptr)
+      throw memory_address_invalid();
+    auto bp = locateMemoryBlock(address);
+    if (bp == blocks.end())
+      throw memory_unmanaged();
+    std::shared_lock<std::shared_mutex> l{bp->second.m};
+    return bp->second.type == MemoryBlockType::transient;
+  }
+  bool isCommon(void* address) const {
+    if (address == nullptr)
+      throw memory_address_invalid();
+    auto bp = locateMemoryBlock(address);
+    if (bp == blocks.end())
+      throw memory_unmanaged();
+    std::shared_lock<std::shared_mutex> l{bp->second.m};
+    return bp->second.type == MemoryBlockType::common;
+  }
+
+  void recordMemoryAllocateEvent(
       void* address,
       size_t size,
       const std::string& tensor,
       size_t alignment) {
+    if (address == nullptr)
+      throw memory_address_invalid();
     // Since MemoryLayout is only a recorder of memory layout information, no
     // need to implement for malloc and salloc seperately.
-    if (size == 0) {
-      recordMemoryAllocateEvent(address, alignment, tensor, alignment);
-      return;
-    }
-
-    std::unique_lock<std::shared_mutex> l{m};
+    if (size == 0)
+      return recordMemoryAllocateEvent(address, alignment, tensor, alignment);
 
     auto bp = blocks.upper_bound(address);
-    if (bp == blocks.begin())
-      bp = blocks.emplace(address, Block(address, block_size)).first;
-    else {
-      --bp;
-      if (utils::address_offset(bp->first, block_size) <= address)
-        bp = blocks.emplace(address, Block(address, block_size)).first;
-    }
+    assert(bp != blocks.begin());
+    --bp;
 
-    auto& sections = bp->second.sections;
-    auto p = sections.begin();
-    while (p != sections.end() &&
+    std::unique_lock<std::shared_mutex> l{bp->second.m};
+    auto& regions = bp->second.regions;
+    auto p = regions.begin();
+    while (p != regions.end() &&
            utils::address_offset(p->first, p->second.size) <= address)
       ++p;
-    if (p == sections.end() || p->first > address || p->second.allocated)
+    if (p == regions.end() || p->first > address || p->second.allocated)
       throw memory_allocated(address);
     if (utils::address_offset(p->first, p->second.size) <
         utils::address_offset(address, size))
@@ -792,10 +1086,10 @@ struct MemoryLayout final {
     // The original unallocated space should be splited to three parts.
     if (p->first < address) {
       // Left part exists.
-      MemorySection s;
+      MemoryRegion s;
       s.address = address;
       s.size = (uint8_t*)p->first - (uint8_t*)address + p->second.size;
-      auto q = sections.emplace(address, s);
+      auto q = regions.emplace(address, s);
       assert(q.second);
       p->second.size = (uint8_t*)address - (uint8_t*)p->first;
       p = q.first;
@@ -803,21 +1097,23 @@ struct MemoryLayout final {
     // Now p->first == address
     if (p->second.size > size) {
       // Right part exists.
-      // Create empty section
-      MemorySection s;
+      // Create empty region
+      MemoryRegion s;
       s.address = (uint8_t*)address + size;
       s.size = p->second.size - size;
-      auto q = sections.emplace(s.address, s);
+      auto q = regions.emplace(s.address, s);
       assert(q.second);
       p->second.size = size;
     }
     p->second.name = tensor;
     p->second.allocated = true;
   }
-  inline void recordMemoryAllocateEvent(
+  void recordMemoryAllocateEvent(
       void* address,
       size_t size,
       const std::string& tensor) {
+    if (address == nullptr)
+      throw memory_address_invalid();
     if (!utils::memory_address_aligned(address, align_size))
       throw memory_exception(address, "Memory address not aligned.");
     size_t aligned_size = utils::get_memory_aligned_size(size, align_size);
@@ -825,83 +1121,84 @@ struct MemoryLayout final {
       aligned_size = align_size;
     recordMemoryAllocateEvent(address, aligned_size, tensor, align_size);
   }
-  inline void recordMemoryFreeEvent(
-      void* address,
-      const std::string& tensor = "") {
-    std::unique_lock<std::shared_mutex> l{m};
-
+  void recordMemoryFreeEvent(void* address, const std::string& tensor = "") {
+    if (address == nullptr)
+      throw memory_address_invalid();
     auto bp = locateMemoryBlock(address);
     if (bp == blocks.end())
       throw memory_not_allocated(address);
 
-    auto& sections = bp->second.sections;
+    std::unique_lock<std::shared_mutex> l{bp->second.m};
+    auto& regions = bp->second.regions;
     // Check if allocated device memory.
-    auto p = sections.find(address);
+    auto p = regions.find(address);
     // Device memory not allocated.
-    if (p == sections.end() || !p->second.allocated)
+    if (p == regions.end() || !p->second.allocated)
       throw memory_not_allocated(address);
     p->second.name = "";
     p->second.allocated = false;
 
-    // Merging free sections.
+    // Merging free regions.
     auto prev = p;
     auto post = p;
     ++post;
-    if (post != sections.end() && !post->second.allocated) {
+    if (post != regions.end() && !post->second.allocated) {
       p->second.size += post->second.size;
-      sections.erase(post);
+      regions.erase(post);
     }
 
-    if (p == sections.begin())
+    if (p == regions.begin())
       return;
     --prev;
     if (!prev->second.allocated) {
       prev->second.size += p->second.size;
-      sections.erase(p);
+      regions.erase(p);
     }
   }
-  inline void recordMemorySplitEvent(void* address, size_t size) {
-    std::unique_lock<std::shared_mutex> l{m};
-
+  void recordMemorySplitEvent(void* address, size_t size) {
+    if (address == nullptr)
+      throw memory_address_invalid();
     auto bp = locateMemoryBlock(address);
     if (bp == blocks.end())
       throw memory_not_allocated(address);
 
-    auto& sections = bp->second.sections;
-    auto p = sections.find(address);
-    if (p == sections.end() || !p->second.allocated)
+    std::unique_lock<std::shared_mutex> l{bp->second.m};
+    auto& regions = bp->second.regions;
+    auto p = regions.find(address);
+    if (p == regions.end() || !p->second.allocated)
       throw memory_not_allocated(address);
     if (p->second.size <= size)
       throw memory_operation_invalid(
           address, "Memory section equals or be smaller than spliting size.");
 
-    MemorySection s = p->second;
+    MemoryRegion s = p->second;
     s.address = utils::address_offset(address, size);
     s.size -= size;
-    sections.emplace(s.address, s);
+    regions.emplace(s.address, s);
     p->second.size = size;
   }
-  inline void recordMemoryMergeEvent(void* left, void* right) {
-    std::unique_lock<std::shared_mutex> l{m};
-
+  void recordMemoryMergeEvent(void* left, void* right) {
+    if (left == nullptr || right == nullptr)
+      throw memory_address_invalid();
     auto bp = locateMemoryBlock(left);
     if (bp == blocks.end())
       throw memory_not_allocated(left);
 
-    auto& sections = bp->second.sections;
-    auto q = sections.find(left);
-    if (q == sections.end() || !q->second.allocated)
+    std::unique_lock<std::shared_mutex> l{bp->second.m};
+    auto& regions = bp->second.regions;
+    auto q = regions.find(left);
+    if (q == regions.end() || !q->second.allocated)
       throw memory_not_allocated(
           left, "Memory for left section not allocated.");
     auto p = q++;
-    if (q == sections.end() || q->first != right || !q->second.allocated)
+    if (q == regions.end() || q->first != right || !q->second.allocated)
       throw memory_not_allocated(
           right, "Memory for right section not allocated.");
     if ((uint8_t*)left + p->second.size != (uint8_t*)right)
       throw memory_operation_invalid(left, "Memory sections not continuous.");
 
     p->second.size += q->second.size;
-    sections.erase(q);
+    regions.erase(q);
   }
 
 }; // struct MemoryLayout
@@ -912,7 +1209,7 @@ struct MemoryLayout final {
 namespace mori {
 namespace events {
 
-enum class ScheduleEventType {
+enum struct ScheduleEventType {
   allocate,
   copyin,
   copyout,
@@ -921,7 +1218,36 @@ enum class ScheduleEventType {
   freedev,
   freehost,
   free
-}; // enum class ScheduleEventType
+}; // enum struct ScheduleEventType
+
+namespace utils {
+
+static std::string get_schedule_event_type_str(ScheduleEventType type) {
+  switch (type) {
+    case ScheduleEventType::allocate:
+      return "allocate";
+    case ScheduleEventType::copyin:
+      return "copyin";
+    case ScheduleEventType::copyout:
+      return "copyout";
+    case ScheduleEventType::swapin:
+      return "swapin";
+    case ScheduleEventType::swapout:
+      return "swapout";
+    case ScheduleEventType::freedev:
+      return "freedev";
+    case ScheduleEventType::freehost:
+      return "freehost";
+    case ScheduleEventType::free:
+      return "free";
+    default:
+      break;
+  }
+  assert(0);
+  return "";
+}
+
+} // namespace utils
 
 struct ScheduleEvent final {
   std::string operator_name = "";
@@ -931,8 +1257,10 @@ struct ScheduleEvent final {
   ScheduleEventType type = ScheduleEventType::allocate;
   std::string postop = ""; // For execution-triggered events, the event should
                            // be executed after executing postop.
-  int timepoint = 0; // For timepoing-triggered events, the event should be
-                     // executed after specificied timepoint.
+  long timepoint = 0; // For timepoing-triggered events, the event should be
+                      // executed after specificied timepoint.
+
+  bool instant = false;
 
   ScheduleEvent() = default;
   ScheduleEvent(
@@ -945,32 +1273,36 @@ struct ScheduleEvent final {
       const std::string& _tensor_name,
       size_t _size,
       ScheduleEventType _event_type,
-      const std::string& _postop)
+      const std::string& _postop,
+      bool _instant = false)
       : operator_name(_op_name),
         tensor_name(_tensor_name),
         size(_size),
         type(_event_type),
-        postop(_postop) {}
+        postop(_postop),
+        instant(_instant) {}
   ScheduleEvent(
       const std::string& _op_name,
       const std::string& _tensor_name,
       size_t _size,
       ScheduleEventType _event_type,
-      int _timepoint)
+      long _timepoint,
+      bool _instant = false)
       : operator_name(_op_name),
         tensor_name(_tensor_name),
         size(_size),
         type(_event_type),
-        timepoint(_timepoint) {}
+        timepoint(_timepoint),
+        instant(_instant) {}
 }; // struct ScheduleEvent
 
 struct StageScheduleEvents {
-  std::vector<ScheduleEvent> execution;
+  std::unordered_map<std::string, std::vector<ScheduleEvent>> execution;
   std::vector<ScheduleEvent> timepoint;
 }; // struct StageScheduleEvents
 
 struct ScheduleEvents {
-  MemoryMap memory_map;
+  layout::MemoryMap memory_map;
   StageScheduleEvents forward_schedule_events;
   StageScheduleEvents backward_schedule_events;
 }; // struct ScheduleEvents
@@ -991,15 +1323,62 @@ struct ScheduleEvents {
 namespace mori {
 namespace status {
 
-enum MemoryDataType {
+struct memory_status_exception : public std::exception {
+ protected:
+  std::string reason = "Memory status exception.";
+
+ public:
+  memory_status_exception() = default;
+  memory_status_exception(const std::string& _reason) : reason(_reason) {}
+  memory_status_exception(const memory_status_exception&) = default;
+  memory_status_exception& operator=(const memory_status_exception&) = default;
+
+  virtual const char* what() const noexcept override {
+    return reason.c_str();
+  }
+
+  virtual ~memory_status_exception() = default;
+}; // struct memory_status_exception
+
+struct tensor_invalid : public memory_status_exception {
+  tensor_invalid() {
+    reason = "Tensor status invalid.";
+  }
+  tensor_invalid(const std::string& _reason)
+      : memory_status_exception(_reason) {}
+}; // struct tensor_invalid
+
+struct memory_section_invalid : public memory_status_exception {
+  memory_section_invalid() {
+    reason = "Memory section status invalid.";
+  }
+  memory_section_invalid(const std::string& _reason)
+      : memory_status_exception(_reason) {}
+}; // struct memory_section_invalid
+
+struct memory_section_nonexist : public memory_status_exception {
+  memory_section_nonexist() {
+    reason = "Memory section not exist.";
+  }
+  memory_section_nonexist(const std::string& _reason)
+      : memory_status_exception(_reason) {}
+}; // struct memory_section_nonexist
+
+} // namespace status
+} // namespace mori
+
+namespace mori {
+namespace status {
+
+enum struct MemoryDataType {
   all,
   inout,
   weight,
   workspace,
   constant
-}; // enum MemoryType
+}; // enum struct MemoryType
 
-enum MemoryStatusType {
+enum struct MemoryStatusType {
   none,
   empty,
   device,
@@ -1007,7 +1386,7 @@ enum MemoryStatusType {
   coexist,
   swapin,
   swapout
-}; // enum MemoryDataStatusType
+}; // enum struct MemoryDataStatusType
 
 struct Tensor;
 
@@ -1030,7 +1409,7 @@ struct MemorySection final {
   void* host_address = nullptr;
   void* device_address = nullptr;
 
-  MemoryStatusType status = none;
+  MemoryStatusType status = MemoryStatusType::none;
 
  public:
   MemorySection() = default;
@@ -1079,7 +1458,7 @@ struct MemorySection final {
 struct Fragment final {
   size_t size = 0;
   void* address = nullptr;
-  MemoryStatusType status = none;
+  MemoryStatusType status = MemoryStatusType::none;
 
   Fragment() = default;
   Fragment(
@@ -1115,10 +1494,10 @@ struct Tensor final {
   // Remaining tensor size in memory
   size_t device_size = 0;
   size_t host_size = 0;
-  MemoryDataType type = all;
+  MemoryDataType type = MemoryDataType::all;
 
   // Indicating if the tensor should be considered in swapping.
-  bool persistant = false;
+  bool persistent = false;
   bool transient = false;
 
   std::string op = "";
@@ -1132,14 +1511,15 @@ struct Tensor final {
   }
   Tensor(const std::string& _name, size_t _size)
       : name(_name), size(_size), device_size(_size), host_size(0) {
-    sections.emplace(0, MemorySection{0, _size, nullptr, nullptr, none});
+    sections.emplace(
+        0, MemorySection{0, _size, nullptr, nullptr, MemoryStatusType::none});
     // if (_size < 1048576 * 4) transient = true;
   }
   Tensor(const std::string& _name, size_t _size, MemoryDataType _type)
       : Tensor(_name, _size) {
     type = _type;
     if (_type == MemoryDataType::constant || _type == MemoryDataType::weight)
-      persistant = true;
+      persistent = true;
     if (_type == MemoryDataType::workspace)
       transient = true;
   }
@@ -1159,8 +1539,8 @@ struct Tensor final {
     size = _size;
     sections[0].size = _size;
   }
-  inline void setPersistant(bool _persistant) {
-    persistant = _persistant;
+  inline void setPersistent(bool _persistent) {
+    persistent = _persistent;
   }
   inline void setTransient(bool _transient) {
     transient = _transient;
@@ -1184,8 +1564,8 @@ struct Tensor final {
   inline MemoryDataType getType() const noexcept {
     return type;
   }
-  inline bool isPersistant() const noexcept {
-    return persistant;
+  inline bool isPersistent() const noexcept {
+    return persistent;
   }
   inline bool isTransient() const noexcept {
     return transient;
@@ -1220,8 +1600,9 @@ struct Tensor final {
    */
   bool isDeviceLocated() const noexcept {
     for (auto& x : sections) {
-      if (x.second.status == empty || x.second.status == device ||
-          x.second.status == coexist)
+      if (x.second.status == MemoryStatusType::empty ||
+          x.second.status == MemoryStatusType::device ||
+          x.second.status == MemoryStatusType::coexist)
         return true;
     }
     return false;
@@ -1229,12 +1610,46 @@ struct Tensor final {
   /**
    * If tensor has all data located on device.
    */
-  bool isDeviceAllLoacted() const noexcept {
+  bool isDeviceAllLocated() const noexcept {
     for (auto& x : sections) {
-      if (x.second.status == none || x.second.status == host)
+      if (x.second.status == MemoryStatusType::none ||
+          x.second.status == MemoryStatusType::host)
         return false;
     }
     return true;
+  }
+  /**
+   * If tensor has data located on host.
+   */
+  bool isHostLocated() const noexcept {
+    for (auto& x : sections) {
+      if (x.second.status == MemoryStatusType::host ||
+          x.second.status == MemoryStatusType::coexist)
+        return true;
+    }
+    return false;
+  }
+  /**
+   * If tensor has all data located on host.
+   */
+  bool isHostAllLocated() const noexcept {
+    for (auto& x : sections) {
+      if (x.second.status == MemoryStatusType::none ||
+          x.second.status == MemoryStatusType::empty ||
+          x.second.status == MemoryStatusType::device)
+        return false;
+    }
+    return true;
+  }
+  /**
+   * If tensor has data located on host or device.
+   */
+  bool isMemoryLocated() const noexcept {
+    for (auto& x : sections) {
+      if (x.second.status != MemoryStatusType::none)
+        return true;
+    }
+    return false;
   }
 
   void split(size_t offset, size_t size) {
@@ -1307,7 +1722,7 @@ struct Tensor final {
     // Since the allocation takes place in the beginning of the application
     // procedure, there should be only one memory section.
     if (sections.size() != 1)
-      throw status_exception("Set allocated for sectioned tensor.");
+      throw status_exception("Set reshaped for sectioned tensor.");
     assert(sections.begin()->first == 0);
     assert(sections.begin()->second.offset == 0);
     size = _size;
@@ -1333,11 +1748,12 @@ struct Tensor final {
   void setAssigned() {
     for (auto& x : sections) {
       switch (x.second.status) {
-        case empty:
-          x.second.status = MemoryStatusType::device;
-        case device:
+        case MemoryStatusType::empty:
+          if (size != 0)
+            x.second.status = MemoryStatusType::device;
+        case MemoryStatusType::device:
           break;
-        case coexist:
+        case MemoryStatusType::coexist:
           throw status_exception("Accessing data not released on host.");
         default:
           throw status_exception("Accessing data not on device.");
@@ -1347,9 +1763,9 @@ struct Tensor final {
   void setAcquired() {
     for (auto& x : sections) {
       switch (x.second.status) {
-        case coexist:
-        case device:
-        case empty:
+        case MemoryStatusType::coexist:
+        case MemoryStatusType::device:
+        case MemoryStatusType::empty:
           break;
         default:
           throw status_exception("Acquiring data not on device.");
@@ -1363,11 +1779,11 @@ struct Tensor final {
     MemorySection& memory_section = sections.at(offset);
     memory_section.host_address = host_address;
     switch (memory_section.status) {
-      case device:
+      case MemoryStatusType::device:
         memory_section.status = MemoryStatusType::coexist;
         host_size += memory_section.size;
-      case coexist:
-      case empty:
+      case MemoryStatusType::coexist:
+      case MemoryStatusType::empty:
         break;
       default: // none host
         throw status_exception(
@@ -1386,12 +1802,12 @@ struct Tensor final {
     MemorySection& memory_section = sections.at(offset);
     memory_section.device_address = device_address;
     switch (memory_section.status) {
-      case none:
+      case MemoryStatusType::none:
         memory_section.status = MemoryStatusType::empty;
         break;
-      case host:
+      case MemoryStatusType::host:
         memory_section.status = MemoryStatusType::coexist;
-      case coexist:
+      case MemoryStatusType::coexist:
         break;
       default: // device empty
         throw status_exception("No data on host while copying in memory data.");
@@ -1411,9 +1827,9 @@ struct Tensor final {
     MemorySection& memory_section = sections.at(offset);
     memory_section.device_address = dst_address;
     switch (memory_section.status) {
-      case empty:
-      case device:
-      case coexist:
+      case MemoryStatusType::empty:
+      case MemoryStatusType::device:
+      case MemoryStatusType::coexist:
         break;
       default: // device none
         throw status_exception("No data on device while moving memory data.");
@@ -1423,11 +1839,11 @@ struct Tensor final {
   void setHostFreed(size_t offset) {
     MemorySection& memory_section = sections.at(offset);
     switch (memory_section.status) {
-      case coexist:
-        memory_section.status = device;
+      case MemoryStatusType::coexist:
+        memory_section.status = MemoryStatusType::device;
         break;
-      case host:
-        memory_section.status = none;
+      case MemoryStatusType::host:
+        memory_section.status = MemoryStatusType::none;
         break;
       default: // none empty device
         throw status_exception("No data on host while freeing host memory.");
@@ -1437,12 +1853,12 @@ struct Tensor final {
   void setDeviceFreed(size_t offset) {
     MemorySection& memory_section = sections.at(offset);
     switch (memory_section.status) {
-      case coexist:
-        memory_section.status = host;
+      case MemoryStatusType::coexist:
+        memory_section.status = MemoryStatusType::host;
         break;
-      case empty:
-      case device:
-        memory_section.status = none;
+      case MemoryStatusType::empty:
+      case MemoryStatusType::device:
+        memory_section.status = MemoryStatusType::none;
         break;
       default: // none host
         throw status_exception("No data on host while freeing host memory.");
@@ -1453,22 +1869,22 @@ struct Tensor final {
   void setFreed(size_t offset) {
     MemorySection& memory_section = sections.at(offset);
     switch (memory_section.status) {
-      case coexist:
+      case MemoryStatusType::coexist:
         device_size -= memory_section.size;
         host_size -= memory_section.size;
         break;
-      case empty:
-      case device:
+      case MemoryStatusType::empty:
+      case MemoryStatusType::device:
         device_size -= memory_section.size;
         break;
-      case host:
+      case MemoryStatusType::host:
         host_size -= memory_section.size;
         break;
       default: // none
         throw status_exception(
             "No data on host and device while freeing memory.");
     }
-    memory_section.status = none;
+    memory_section.status = MemoryStatusType::none;
   }
 
   inline bool hasFragment() const noexcept {
@@ -1478,13 +1894,13 @@ struct Tensor final {
     return fragment;
   }
   inline void setFragment(size_t _size) {
-    if (fragment.status != none)
+    if (fragment.status != MemoryStatusType::none)
       throw status_exception("Setting existed fragment size.");
     fragment.size = _size;
   }
 
   void setFragmentPlaced(void* address) {
-    if (fragment.status != none)
+    if (fragment.status != MemoryStatusType::none)
       throw status_exception("Placing existed fragment.");
     fragment.status = MemoryStatusType::empty;
     fragment.address = address;
@@ -1495,7 +1911,7 @@ struct Tensor final {
   }
 
   void setFragmentRemoved() {
-    if (fragment.status == none)
+    if (fragment.status == MemoryStatusType::none)
       throw status_exception("Removing non-exist fragment.");
     fragment.status = MemoryStatusType::none;
   }
@@ -1531,33 +1947,10 @@ struct Operator final {
  public:
   Operator() = default;
   Operator(const std::string& _name) : name(_name) {}
-  Operator(const Operator& _op) {
-    name = _op.name;
-    prevs = _op.prevs;
-    posts = _op.posts;
-    tensors = _op.tensors;
-  }
-  Operator(Operator&& _op) {
-    name = std::move(_op.name);
-    prevs = std::move(_op.prevs);
-    posts = std::move(_op.posts);
-    tensors = std::move(_op.tensors);
-  }
-
-  Operator& operator=(const Operator& _op) {
-    name = _op.name;
-    prevs = _op.prevs;
-    posts = _op.posts;
-    tensors = _op.tensors;
-    return *this;
-  }
-  Operator& operator=(Operator&& _op) {
-    name = std::move(_op.name);
-    prevs = std::move(_op.prevs);
-    posts = std::move(_op.posts);
-    tensors = std::move(_op.tensors);
-    return *this;
-  }
+  Operator(const Operator& _op) = default;
+  Operator(Operator&& _op) = default;
+  Operator& operator=(const Operator& _op) = default;
+  Operator& operator=(Operator&& _op) = default;
 
   inline bool isBackwardPropagation() const noexcept {
     return backward_propagation;
@@ -1744,8 +2137,8 @@ struct TensorPres final {
   inline MemoryDataType getType() const noexcept {
     return status.getType();
   }
-  inline bool isPersistant() const noexcept {
-    return status.isPersistant();
+  inline bool isPersistent() const noexcept {
+    return status.isPersistent();
   }
   inline bool isTransient() const noexcept {
     return status.isTransient();
@@ -1772,7 +2165,16 @@ struct TensorPres final {
     return status.isDeviceLocated();
   }
   inline bool isDeviceAllLocated() const noexcept {
-    return status.isDeviceAllLoacted();
+    return status.isDeviceAllLocated();
+  }
+  inline bool isHostLocated() const noexcept {
+    return status.isHostLocated();
+  }
+  inline bool isHostAllLocated() const noexcept {
+    return status.isHostAllLocated();
+  }
+  inline bool isMemoryLocated() const noexcept {
+    return status.isMemoryLocated();
   }
 
   inline Tensor& get() noexcept {
@@ -2033,6 +2435,12 @@ struct MemoryStatus final {
     return execution_order;
   }
 
+  inline bool hasExecutionPost(const std::string& op) const {
+    auto p = std::find(execution_order.begin(), execution_order.end(), op);
+    if (p == execution_order.end())
+      throw status_exception("Operator not registered.");
+    return ++p != execution_order.end();
+  }
   inline std::string getExecutionPost(const std::string& op) const {
     auto p = std::find(execution_order.begin(), execution_order.end(), op);
     if (p == execution_order.end())
@@ -2042,13 +2450,19 @@ struct MemoryStatus final {
     return *p;
   }
 
+  inline bool hasExecutionPrev(const std::string& op) const {
+    auto p = std::find(execution_order.begin(), execution_order.end(), op);
+    if (p == execution_order.end())
+      throw status_exception("Operator not registered.");
+    return p != execution_order.begin();
+  }
   inline std::string getExecutionPrev(const std::string& op) const {
     auto p = std::find(execution_order.begin(), execution_order.end(), op);
     if (p == execution_order.end())
       throw status_exception("Operator not registered.");
-    if (p-- == execution_order.begin())
+    if (p == execution_order.begin())
       return "";
-    return *p;
+    return *--p;
   }
 
   template <typename T>
@@ -2105,13 +2519,13 @@ struct MemoryStatus final {
     return tryReferenceOperator(op).reference();
   }
 
-  inline std::unordered_set<std::string> getTensors() {
+  inline std::unordered_set<std::string> getTensors() const {
     std::unordered_set<std::string> re;
     for (auto& x : tensor_statuses)
       re.insert(x.first);
     return re;
   }
-  inline std::unordered_set<std::string> getOperators() {
+  inline std::unordered_set<std::string> getOperators() const {
     std::unordered_set<std::string> re;
     for (auto& x : operator_statuses)
       re.insert(x.first);
@@ -2158,27 +2572,27 @@ struct MemoryStatus final {
 
 }; // struct MemoryStatus
 
-namespace util {
+namespace utils {
 
-// static std::string get_tensor_type_str(MemoryDataType type) {
-//     switch (type) {
-//         case MemoryDataType::all:
-//             return "all";
-//         case MemoryDataType::constant:
-//             return "constant";
-//         case MemoryDataType::inout:
-//             return "inout";
-//         case MemoryDataType::weight:
-//             return "weight";
-//         case MemoryDataType::workspace:
-//             return "workspace";
-//     }
+static std::string get_tensor_type_str(MemoryDataType type) {
+  switch (type) {
+    case MemoryDataType::all:
+      return "all";
+    case MemoryDataType::constant:
+      return "constant";
+    case MemoryDataType::inout:
+      return "inout";
+    case MemoryDataType::weight:
+      return "weight";
+    case MemoryDataType::workspace:
+      return "workspace";
+  }
 
-//     assert(0);
-//     return "";
-// }
+  assert(0);
+  return "";
+}
 
-} // namespace util
+} // namespace utils
 
 using TensorView = status::MemoryStatus::TensorView;
 using OperatorView = status::MemoryStatus::OperatorView;
@@ -2205,6 +2619,7 @@ struct Backend {
   virtual void halfIteration() = 0;
 
   virtual void submitEvent(const events::MemoryEvent& event) = 0;
+  virtual void submitEvent(const events::ExecutionEvent& event) = 0;
   virtual events::ScheduleEvents getScheduleEvents() = 0;
 
   virtual void stop() {}
@@ -2213,6 +2628,56 @@ struct Backend {
 
   virtual ~Backend(){};
 }; // struct Backend
+
+} // namespace mori
+
+namespace mori {
+
+struct context_exception : public std::exception {
+  context_exception() = default;
+  context_exception(const context_exception& exception) = default;
+
+  context_exception& operator=(const context_exception& exception) = default;
+  virtual const char* what() const throw() {
+    return "Context exception.";
+  }
+}; // struct status_exception
+
+struct context_missing : public context_exception {
+ protected:
+  std::string reason = "Context missing: ";
+
+ public:
+  context_missing(const std::string& parameter) {
+    reason += parameter;
+  }
+  context_missing(const context_missing& exception) = default;
+
+  context_missing& operator=(const context_missing& exception) = default;
+  virtual const char* what() const throw() {
+    return reason.c_str();
+  }
+
+  ~context_missing() = default;
+}; // struct context_missing
+
+struct context_invalid : public context_exception {
+ protected:
+  std::string reason = "Context invalid: ";
+
+ public:
+  context_invalid(const std::string& parameter) {
+    reason += parameter;
+  }
+  context_invalid(const context_invalid& exception) = default;
+
+  context_invalid& operator=(const context_invalid& exception) = default;
+  virtual const char* what() const throw() {
+    return reason.c_str();
+  }
+
+  ~context_invalid() = default;
+}; // struct context_invalid
 
 } // namespace mori
 
@@ -2272,13 +2737,16 @@ struct Context final {
 
   void prepareDefaultParams() {
     defaults.emplace("path", "int://local");
-    defaults.emplace("scheduler", "fifo");
-    defaults.emplace("scheduler.trigger_event", "dependency");
+    defaults.emplace("scheduler", "section");
+    defaults.emplace("scheduler.dependency.timeaware", "true");
+    defaults.emplace("scheduler.dependency.thershold", "2");
 
     defaults.emplace("exporters.events", "empty");
     defaults.emplace("exporters.events.method", "empty");
     defaults.emplace("exporters.tensors", "empty");
     defaults.emplace("exporters.tensors.method", "empty");
+    defaults.emplace("exporters.schedule", "empty");
+    defaults.emplace("exporters.schedule.method", "empty");
   }
 
  public:
@@ -2299,8 +2767,8 @@ struct Context final {
   }
 
   Context(Context&& _context) {
-    defaults = move(_context.defaults);
-    contexts = move(_context.contexts);
+    defaults = std::move(_context.defaults);
+    contexts = std::move(_context.contexts);
   }
 
   void operator=(const Context& _context) {
@@ -2309,8 +2777,8 @@ struct Context final {
   }
 
   void operator=(Context&& _context) {
-    defaults = move(_context.defaults);
-    contexts = move(_context.contexts);
+    defaults = std::move(_context.defaults);
+    contexts = std::move(_context.contexts);
   }
 
   std::string& at(const std::string& key) {
@@ -2350,7 +2818,7 @@ struct Context final {
   }
 
   bool signal(const std::string& key) const {
-    return at(key) == "1" ? true : false;
+    return at(key) == "true" ? true : false;
   }
 
   bool isParamExists(const std::string& key) const {
@@ -2397,95 +2865,6 @@ struct Context final {
 
 } // namespace mori
 
-#include <iostream>
-
-namespace mori {
-
-/**
- * LogLevel
- * Describe the level of the log.
- */
-enum LogLevel { debug, info, warning, error }; // enum LogLevel;
-
-/**
- * Log
- * Log Entry
- */
-struct Log final {}; // struct Log
-
-/**
- * Logger
- * Basic logger interface
- */
-struct Logger {
-  LogLevel default_level;
-  std::string log_buffer;
-
-  virtual void setDefaultLogLevel(LogLevel level) {
-    default_level = level;
-  }
-
-  inline std::string getLogLevelStr(LogLevel level) {
-    switch (level) {
-      case debug:
-        return "[Debug]  ";
-      case info:
-        return "[Info]   ";
-      case warning:
-        return "[Warning]";
-      case error:
-        return "[Error]  ";
-      default:
-        return "[Info]   ";
-        break;
-    }
-  }
-
-  virtual void submitInternal(const std::string& log) {
-    log_buffer.append(log);
-  }
-  virtual void flush(LogLevel level) {}
-  virtual void flush() {
-    flush(default_level);
-  }
-
-  virtual void submit(LogLevel level, const std::string& log) {
-    log_buffer.clear();
-    submitInternal(log);
-    flush(level);
-  };
-  virtual void submit(const std::string& log) {
-    submit(default_level, log);
-  }
-
-  virtual Logger& operator<<(LogLevel level) {
-    default_level = level;
-    return *this;
-  }
-  virtual Logger& operator<<(const std::string& log) {
-    submitInternal(log);
-    return *this;
-  }
-}; // struct Logger
-
-/**
- * StdIOLogger
- * Submit logs to std streams
- */
-struct StdIOLogger : public Logger {
-  virtual void flush(LogLevel level) {
-    std::cout << getLogLevelStr(level) << " "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(
-                     std::chrono::system_clock::now().time_since_epoch())
-                     .count()
-              << " " << log_buffer << std::endl;
-    log_buffer.clear();
-  }
-
-}; // struct StdIOLogger
-
-} // namespace mori
-
 #ifndef ENABLE_EXTERNAL_BACKEND
 
 #ifndef ENABLE_EXTERNAL_BACKEND
@@ -2515,6 +2894,40 @@ struct StdIOLogger : public Logger {
 #include <memory>
 
 #include <dlfcn.h>
+
+namespace mori {
+
+struct backend_exception : public std::exception {
+  backend_exception() = default;
+  backend_exception(const backend_exception& exception) = default;
+
+  backend_exception& operator=(const backend_exception& exception) = default;
+  virtual const char* what() const throw() {
+    return "Backend exception.";
+  }
+
+  virtual ~backend_exception() = default;
+}; // struct backend_exception
+
+struct dynamic_library_exception : public backend_exception {
+ protected:
+  std::string reason;
+
+ public:
+  dynamic_library_exception(const std::string _reason) : reason(_reason) {}
+  dynamic_library_exception(const dynamic_library_exception& exception) =
+      default;
+
+  dynamic_library_exception& operator=(
+      const dynamic_library_exception& exception) = default;
+  virtual const char* what() const throw() {
+    return reason.c_str();
+  }
+
+  virtual ~dynamic_library_exception() = default;
+}; // struct dynamic_library_exception
+
+} // namespace mori
 
 namespace mori {
 namespace utils {
@@ -2628,7 +3041,8 @@ struct EventsExporter {
           context_view);
   }
 
-  virtual void onEvent(const events::MemoryEvent& event) {}
+  virtual void onMemoryEvent(const events::MemoryEvent& event) const {}
+  virtual void onExecutionEvent(const events::ExecutionEvent& event) const {}
 
   virtual ~EventsExporter() {
     if (hInst)
@@ -2655,11 +3069,36 @@ struct TensorsExporter {
           export_method,
           context_view);
   }
-  virtual void onTensor(const status::Tensor& tensor) {}
-  virtual void onOperator(const status::Operator& operator_status) {}
-  virtual void onEntry(const std::string& op) {}
+  virtual void onTensors(status::MemoryStatus& status) const {}
 
   virtual ~TensorsExporter() {
+    if (hInst)
+      dlclose(hInst);
+  }
+}; // struct TensorExporter
+
+struct ScheduleExporter {
+  std::unique_ptr<exportimpl::ExportMethod> export_method;
+  void* hInst = nullptr;
+
+  ScheduleExporter(const Context::View& context) {
+    std::string export_method_name = context.at("method");
+    Context::View context_view = context.view("method");
+    if (export_method_name == "empty")
+      export_method.reset(new exportimpl::ExportMethod(context_view));
+    else if (export_method_name == "file")
+      export_method.reset(new exportimpl::FileExportMethod(context_view));
+    else
+      hInst = utils::load_dylib(
+          "Schedule Events Export Method",
+          context.at("method.path"),
+          "export_method_entry",
+          export_method,
+          context_view);
+  }
+  virtual void onScheduleEvents(const events::ScheduleEvents& events) const {}
+
+  virtual ~ScheduleExporter() {
     if (hInst)
       dlclose(hInst);
   }
@@ -2671,25 +3110,32 @@ struct TensorsExporter {
 namespace mori {
 namespace events {
 
+template <typename T>
 struct EventSet;
 
 struct Events final {
  private:
-  friend struct EventSet;
+  friend struct EventSet<MemoryEvent>;
+  friend struct EventSet<ExecutionEvent>;
 
  private:
   int iteration = 0;
-  // key: iteration, value: MemoryEvent
-  std::multimap<int, MemoryEvent> events;
+  // key: iteration, value: MemoryEvent / ExecutionEvent
+  std::multimap<int, MemoryEvent> memory_events;
+  std::multimap<int, ExecutionEvent> execution_events;
 
  public:
   Events() = default;
 
   void submitEvent(const MemoryEvent& event) {
-    events.emplace(iteration, event);
+    memory_events.emplace(iteration, event);
+  }
+  void submitEvent(const ExecutionEvent& event) {
+    execution_events.emplace(iteration, event);
   }
 
-  EventSet select() const;
+  EventSet<MemoryEvent> from_memory_events() const;
+  EventSet<ExecutionEvent> from_execution_events() const;
 
   int getIteration() const noexcept {
     return iteration;
@@ -2705,9 +3151,14 @@ struct Events final {
 
 }; // struct Events
 
+template <typename T>
 struct EventSet final {
  private:
-  using event_iter = std::multimap<int, MemoryEvent>::const_iterator;
+  friend Events;
+
+ private:
+  using event_base = std::multimap<int, T>;
+  using event_iter = typename event_base::const_iterator;
 
   struct Comparator final {
     bool operator()(const event_iter& p, const event_iter& q) const {
@@ -2718,29 +3169,29 @@ struct EventSet final {
   }; // struct Comparator
 
  public:
-  using item = std::pair<int, MemoryEvent>;
+  using item = std::pair<int, T>;
   using pred = std::function<bool(const item&)>;
   using res = std::set<event_iter, Comparator>;
 
  private:
-  const std::multimap<int, MemoryEvent>& events_base;
+  const event_base& events_base;
   std::set<event_iter, Comparator> events_cond;
   std::vector<pred> preds;
 
   bool first_query = true;
 
- public:
-  EventSet(const Events& events) : events_base(events.events) {}
+ private:
+  EventSet(const event_base& events) : events_base(events) {}
 
+ public:
   EventSet(const EventSet&) = default;
   EventSet(EventSet&&) = default;
 
-  EventSet select() {
+  EventSet select() const {
     return *this;
   }
 
-  EventSet& where(
-      const std::function<bool(const std::pair<int, MemoryEvent>&)> f) {
+  EventSet& where(const std::function<bool(const std::pair<int, T>&)> f) {
     preds.push_back(f);
     return *this;
   }
@@ -2776,17 +3227,21 @@ struct EventSet final {
     return *this;
   }
 
-  const res& ref() const noexcept {
+  inline const res& ref() const noexcept {
     return events_cond;
   }
 
-  size_t size() const noexcept {
+  inline size_t size() const noexcept {
     if (first_query)
       return events_base.size();
     return events_cond.size();
   }
 
-  void clear() {
+  inline bool empty() const noexcept {
+    return events_cond.empty();
+  }
+
+  inline void clear() {
     events_cond.clear();
     first_query = true;
   }
@@ -2794,25 +3249,25 @@ struct EventSet final {
   ~EventSet() = default;
 }; // struct EventSet
 
-inline EventSet Events::select() const {
-  return EventSet(*this);
+inline EventSet<MemoryEvent> Events::from_memory_events() const {
+  return EventSet<MemoryEvent>{this->memory_events};
 }
 
-/**
- * from
- * Form a from(xxx).select(xxx).where(xxx) query.
- */
-static inline EventSet select_from(const EventSet& events) {
-  return events;
+inline EventSet<ExecutionEvent> Events::from_execution_events() const {
+  return EventSet<ExecutionEvent>{this->execution_events};
 }
 
-static inline EventSet select_from(const Events& events) {
-  return events.select();
+template <typename T>
+inline static EventSet<T> select(const EventSet<T>& event_set) {
+  EventSet<T> re = event_set;
+  re.get();
+  return re;
 }
 
 } // namespace events
 } // namespace mori
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -2825,42 +3280,42 @@ static inline EventSet select_from(const Events& events) {
 namespace mori {
 namespace decisions {
 
-struct Node final {
-  Region& region;
+struct LayoutModel final {
+ public:
+  struct Node final {
+    layout::Region& region;
 
-  size_t lower_remaining_size =
-      0; // The remaining size analyzed with lower layer nodes.
-  size_t upper_remaining_size =
-      0; // The remaining size analyzed with upper layer nodes.
+    size_t lower_remaining_size =
+        0; // The remaining size analyzed with lower layer nodes.
+    size_t upper_remaining_size =
+        0; // The remaining size analyzed with upper layer nodes.
 
-  size_t lower_fragment_remaining_size = 0;
-  size_t upper_fragment_remaining_size = 0;
+    size_t lower_fragment_remaining_size = 0;
+    size_t upper_fragment_remaining_size = 0;
 
-  int cluster = 0;
-  int lower_group =
-      0; // The group while this node analyzed with lower layer nodes.
-  int upper_group =
-      0; // The group while this node analyzed with upper layer nodes.
+    int cluster = 0;
+    int lower_group =
+        0; // The group while this node analyzed with lower layer nodes.
+    int upper_group =
+        0; // The group while this node analyzed with upper layer nodes.
 
-  std::vector<Node*> posts;
+    std::vector<Node*> posts;
 
-  Node(Region& _r) : region(_r) {
-    lower_remaining_size = _r.size;
-    upper_remaining_size = _r.size;
-  }
+    Node(layout::Region& _r) : region(_r) {
+      lower_remaining_size = _r.size;
+      upper_remaining_size = _r.size;
+    }
 
-  void setFragment(size_t _size) {
-    region.fragment_size = _size;
-    lower_fragment_remaining_size = _size;
-    upper_fragment_remaining_size = _size;
-  }
-}; //  struct Node
+    void setFragment(size_t _size) {
+      region.fragment_size = _size;
+      lower_fragment_remaining_size = _size;
+      upper_fragment_remaining_size = _size;
+    }
+  }; //  inner struct Node
 
-struct Model final {
- private:
  private:
   // std::unordered_map<std::string, Node*> tensors;
-  MemoryMap memory_map;
+  layout::MemoryMapBuilder memory_map_builer;
   std::unordered_map<std::string, Node> nodes;
 
   std::map<int, size_t> clusters;
@@ -2878,154 +3333,25 @@ struct Model final {
   bool analyzed = false;
 
  protected:
-  std::pair<int, int> getClusterSizeRatio(int c1, int c2) {
-    size_t s1 = clusters.at(c1);
-    size_t s2 = clusters.at(c2);
-
-    if (s1 == s2)
-      return std::make_pair(1, 1);
-
-    size_t c = s1 < s2 ? s1 : s2;
-    for (int i = c; i > 0; --i) {
-      if (s1 % i == 0 && s2 % i == 0) {
-        s1 /= i;
-        s2 /= i;
-      }
-    }
-
-    // TODO: calculate cluster size ratio.
-    return std::make_pair(s2, s1);
-  }
-
- protected:
   void fillModel(status::MemoryStatus& status) {
     std::string entry = status.getEntry();
     for (auto& so : status.getExecutionOrder()) {
       status::OperatorPres op_pres = status.referenceOperator(so);
       for (auto& st : op_pres.getTensors()) {
         status::TensorPres tensor_pres = status.referenceTensor(st);
-        // if (tensor_pres.isPersistant() || tensor_pres.isTransient())
-        // continue; Do submit here.
-        Layer& l = memory_map.getCurrentLayer();
-        if (l.requested_size + tensor_pres.getSize() > l.size)
-          memory_map.createLayer();
-        Region r(tensor_pres.getName(), tensor_pres.getSize());
-        memory_map.submitMemoryRegion(r);
-        nodes.emplace(r.name, memory_map.regions.at(r.name));
+        if (tensor_pres.isPersistent() || tensor_pres.isTransient())
+          continue;
+        // Do submit here.
+        layout::Layer& l = memory_map_builer.getCurrentLayer();
+        size_t aligned_size = utils::get_memory_aligned_size(
+            tensor_pres.getSize(),
+            memory_map_builer.getMemoryInfo().device.align_size);
+        if (l.requested_size + aligned_size > l.size)
+          memory_map_builer.createLayer();
+        layout::Region r(tensor_pres.getName(), aligned_size);
+        memory_map_builer.submitMemoryRegion(r);
+        nodes.emplace(r.name, memory_map_builer.regions.at(r.name));
       }
-    }
-  }
-
-  void clustering() {
-    clusters[1] = 128;
-    clusters[2] = 256;
-    clusters[3] = 384;
-    clusters[4] = 512;
-    // TODO: Cluster the nodes with K-Means++
-    for (auto& x : memory_map.layers) {
-      for (auto& s : x.regions) {
-        // clusters[y.size] = y.size;
-        // y.cluster = y.size;
-        Node& n = nodes.at(s);
-        switch (n.region.size) {
-          case 124:
-            n.cluster = 1;
-            break;
-          case 256:
-          case 258:
-            n.cluster = 2;
-            break;
-          case 384:
-            n.cluster = 3;
-            break;
-          case 512:
-            n.cluster = 4;
-            break;
-          default:
-            assert(0);
-            break;
-        }
-      }
-    }
-  }
-
-  void grouping() {
-    int current_group = 1;
-
-    auto pl = memory_map.layers.rbegin();
-    ++pl; // If grouping now, there must be two or more layers.
-    while (pl != memory_map.layers.rend()) {
-      auto pu = pl;
-      --pu;
-
-      auto& lowers = pl->regions;
-      auto& uppers = pu->regions;
-
-      auto ql = lowers.begin();
-      auto qu = uppers.begin();
-
-      while (ql != lowers.end() && qu != uppers.end()) {
-        int lower_cluster = nodes.at(*ql).cluster;
-        int upper_cluster = nodes.at(*qu).cluster;
-
-        // Initial ratio.
-        auto&& grouping_ratio =
-            getClusterSizeRatio(lower_cluster, upper_cluster);
-
-        int lower_count = grouping_ratio.first;
-        int upper_count = grouping_ratio.second;
-
-        int lower_count_current = 0;
-        int upper_count_current = 0;
-
-        while (ql != lowers.end() && lower_count_current < lower_count) {
-          Node& nl = nodes.at(*ql);
-          auto&& current_grouping_ratio =
-              getClusterSizeRatio(lower_cluster, nl.cluster);
-          // Adjustment of grouping.
-          if (current_grouping_ratio.first != current_grouping_ratio.second) {
-            lower_count = lower_count * current_grouping_ratio.second /
-                current_grouping_ratio.first;
-            lower_count_current = lower_count_current *
-                current_grouping_ratio.second / current_grouping_ratio.first;
-            lower_cluster = nl.cluster;
-          }
-          nl.upper_group = current_group; // Analyzing with upper layer nodes,
-                                          // hence upper_group.
-          ++lower_count_current;
-          ++ql;
-        }
-        while (qu != uppers.end() && upper_count_current < upper_count) {
-          Node& nu = nodes.at(*qu);
-          auto&& current_grouping_ratio =
-              getClusterSizeRatio(upper_cluster, nu.cluster);
-          // Adjustment of grouping.
-          if (current_grouping_ratio.first != current_grouping_ratio.second) {
-            upper_count = upper_count * current_grouping_ratio.second /
-                current_grouping_ratio.first;
-            upper_count_current = upper_count_current *
-                current_grouping_ratio.second / current_grouping_ratio.first;
-            upper_cluster = nu.cluster;
-          }
-          nu.lower_group = current_group; // Analyzing with lower layer nodes,
-                                          // hence lower_group.
-          ++upper_count_current;
-          ++qu;
-        }
-        ++current_group;
-      }
-
-      if (ql == lowers.end()) {
-        while (qu != uppers.end())
-          nodes.at(*qu++).lower_group = current_group;
-        ++current_group;
-      } else if (qu == uppers.end()) {
-        while (ql != lowers.end())
-          nodes.at(*ql++).upper_group = current_group;
-        ++current_group;
-      }
-
-      ++pl;
     }
   }
 
@@ -3033,13 +3359,13 @@ struct Model final {
     bool tensor_moved = true;
     while (tensor_moved) {
       tensor_moved = false;
-      auto pl = memory_map.layers.rbegin();
-      while (pl != memory_map.layers.rend()) {
+      auto pl = memory_map_builer.layers.rbegin();
+      while (pl != memory_map_builer.layers.rend()) {
         // Fragments exceed the memory capacity.
         if (!pl->isAccomodatable()) {
           // Check the existance of the upper layer.
-          if (pl == memory_map.layers.rbegin())
-            memory_map.createLayer();
+          if (pl == memory_map_builer.layers.rbegin())
+            memory_map_builer.createLayer();
           auto pu = pl;
           --pu;
 
@@ -3092,7 +3418,7 @@ struct Model final {
           break;
 
         auto pu = pl++;
-        if (pl == memory_map.layers.rend())
+        if (pl == memory_map_builer.layers.rend())
           break;
 
         auto& lowers = pl->regions;
@@ -3140,11 +3466,11 @@ struct Model final {
   }
 
   void generateTree() {
-    auto pl = memory_map.layers.begin();
+    auto pl = memory_map_builer.layers.begin();
     auto pu = pl;
     ++pu;
 
-    while (pu != memory_map.layers.end()) {
+    while (pu != memory_map_builer.layers.end()) {
       auto& lowers = pl++->regions;
       auto& uppers = pu++->regions;
 
@@ -3156,39 +3482,40 @@ struct Model final {
                                    // need to split the lower layer tensors.
         Node& nl = nodes.at(*ql);
         Node& nu = nodes.at(*qu);
-        if (nl.upper_remaining_size > nu.lower_remaining_size) {
-          // Lower layer node along with the fragment larger than upper layer
-          // node.
-          size_t size_sect =
-              (nl.upper_remaining_size - nu.lower_remaining_size) > smin
-              ? nu.lower_remaining_size
-              : nl.upper_remaining_size;
-          nl.region.sections.push_back(size_sect);
-          nl.upper_remaining_size -= size_sect;
 
-          // The nu should be fully covered by nl.
-          nu.lower_remaining_size = 0;
+        size_t size_sectioned =
+            nl.upper_remaining_size > nu.lower_remaining_size
+            ? nu.lower_remaining_size
+            : nl.upper_remaining_size;
+        if (size_sectioned >= smin)
+          nl.region.sections.push_back(size_sectioned);
+        else
+          nl.region.sections.back() += size_sectioned;
+        nl.upper_remaining_size -= size_sectioned;
+        nu.lower_remaining_size -= size_sectioned;
 
-          // Process of fragment.
+        // Process of fragment.
+        if (nl.upper_remaining_size > 0) {
           size_t size_frag =
               nl.upper_remaining_size > nu.lower_fragment_remaining_size
               ? nu.lower_fragment_remaining_size
               : nl.upper_remaining_size;
           nl.upper_remaining_size -= size_frag;
           nu.lower_fragment_remaining_size -= size_frag;
-        } else {
-          // The remaining lower tensor should be swapped out.
-          nl.region.sections.push_back(nl.upper_remaining_size);
-          nu.lower_remaining_size -= nl.upper_remaining_size;
-          nl.upper_remaining_size = 0;
-
-          // Process of fragment.
+        } else if (nu.lower_remaining_size > 0) {
           size_t size_frag =
-              nl.upper_fragment_remaining_size > nu.lower_remaining_size
-              ? nu.lower_remaining_size
+              nu.lower_remaining_size > nl.upper_fragment_remaining_size
+              ? nl.upper_fragment_remaining_size
+              : nu.lower_remaining_size;
+          nu.lower_remaining_size -= size_frag;
+          nl.upper_fragment_remaining_size -= size_frag;
+        } else {
+          size_t size_frag = nl.upper_fragment_remaining_size >
+                  nu.lower_fragment_remaining_size
+              ? nu.lower_fragment_remaining_size
               : nl.upper_fragment_remaining_size;
           nl.upper_fragment_remaining_size -= size_frag;
-          nu.lower_remaining_size -= size_frag;
+          nu.lower_fragment_remaining_size -= size_frag;
         }
 
         nl.posts.push_back(&nu);
@@ -3203,7 +3530,10 @@ struct Model final {
       if (qu == uppers.end()) {
         while (ql != lowers.end()) {
           Node& n = nodes.at(*ql++);
-          n.region.sections.push_back(n.upper_remaining_size);
+          if (n.upper_remaining_size >= smin)
+            n.region.sections.push_back(n.upper_remaining_size);
+          else
+            n.region.sections.back() += n.upper_remaining_size;
           n.upper_remaining_size = 0;
         }
         for (auto& s : uppers)
@@ -3214,23 +3544,23 @@ struct Model final {
     }
 
     // Section information for the top layer. No splition (only one section).
-    for (auto& s : memory_map.layers.back()) {
-      Region& r = memory_map.regions.at(s);
+    for (auto& s : memory_map_builer.layers.back()) {
+      layout::Region& r = memory_map_builer.regions.at(s);
       r.sections.push_back(r.size);
     }
   }
 
  public:
-  Model() = default;
-  Model(const Model&) = default;
-  Model(Model&&) = default;
+  LayoutModel() = default;
+  LayoutModel(const LayoutModel&) = default;
+  LayoutModel(LayoutModel&&) = default;
 
-  Model& operator=(const Model&) = default;
-  Model& operator=(Model&&) = default;
+  LayoutModel& operator=(const LayoutModel&) = default;
+  LayoutModel& operator=(LayoutModel&&) = default;
 
   void setMemoryInfo(const MemoryInfo& memory_info) {
-    device_size = memory_info.device.total_size;
-    memory_map.setMemorySize(device_size);
+    device_size = memory_info.device.common_block.size;
+    memory_map_builer.setMemoryInfo(memory_info);
   }
 
   void analyze(status::MemoryStatus& status, bool fragmented = true) {
@@ -3238,12 +3568,12 @@ struct Model final {
       return;
 
     fillModel(status);
-    for (auto& x : memory_map.layers)
+    for (auto& x : memory_map_builer.layers)
       assert(x.isAccomodatable());
     // If only one layer, there'e no need to analyze.
-    if (memory_map.layers.size() != 1) {
+    if (memory_map_builer.layers.size() != 1) {
       generateFragments();
-      for (auto& x : memory_map.layers)
+      for (auto& x : memory_map_builer.layers)
         assert(x.isAccomodatable());
       generateTree();
     }
@@ -3251,33 +3581,219 @@ struct Model final {
   }
 
   int getLayerCount() const {
-    return memory_map.layers.size();
+    return memory_map_builer.layers.size();
   }
-  const std::vector<Layer>& getLayers() const {
-    return memory_map.layers;
+  const std::vector<layout::Layer>& getLayers() const {
+    return memory_map_builer.layers;
   }
-  const Layer& getLayer(int _layer) const {
-    return memory_map.layers[_layer];
+  const layout::Layer& getLayer(int _layer) const {
+    return memory_map_builer.layers[_layer];
   }
   const Node getMemoryNode(const std::string& _node) const {
     return nodes.at(_node);
   }
 
-  MemoryMap getMemoryMap() {
+  layout::MemoryMap getMemoryMap() {
     if (!analyzed)
       throw status_exception("Memory map not analyzed.");
-    return memory_map;
+    return memory_map_builer.build();
   }
 
   void clear() noexcept {
     clusters.clear();
-    memory_map.clear();
-    memory_map.createLayer();
+    memory_map_builer.clear();
+    memory_map_builer.createLayer();
     analyzed = false;
   }
 
-  ~Model() = default;
+  ~LayoutModel() = default;
 }; // struct Model
+
+} // namespace decisions
+} // namespace mori
+
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+namespace mori {
+namespace decisions {
+
+struct TransferringModel {
+  long analyze(size_t size) {
+    // long t = size / 1048576;
+    // return t / 12;
+    return size >> 2;
+  }
+
+}; // struct TransferModel
+
+struct TimeModel final {
+ public:
+  struct Timespan final {
+    std::string target;
+    long span = 0;
+    bool synchronization = false;
+    long timepoint = 0;
+
+    Timespan() = default;
+    Timespan(const std::string& _target, long _span)
+        : target(_target), span(_span) {}
+
+    inline bool isSynchronization() {
+      return synchronization;
+    }
+    inline void setSynchronization(bool _synchronization) {
+      synchronization = _synchronization;
+    }
+  }; // inner struct Timespan
+
+  struct Lane final {
+    Direction synchronization_type = Direction::prev;
+    std::vector<std::pair<std::string, Timespan>> timespans;
+    std::string current_synchronization_label = "";
+
+    void submitSynchronizationLabel(const std::string synchronization_label) {
+      if (synchronization_type == Direction::post) {
+        for (auto p = timespans.rbegin(); p != timespans.rend(); ++p) {
+          if (p->second.synchronization)
+            break;
+          if (p->first != synchronization_label)
+            throw status_exception("Synchronization label mismatch.");
+        }
+      }
+      Timespan timespan(synchronization_label, 0);
+      auto& target = timespans.emplace_back(synchronization_label, timespan);
+      target.second.synchronization = true;
+      current_synchronization_label = synchronization_label;
+    }
+    void submitTimespan(
+        const std::string synchronization_label,
+        const Timespan& _timespan) {
+      if (synchronization_type == Direction::post) {
+        if (synchronization_label == current_synchronization_label)
+          throw status_exception("Synchronization label mismatch.");
+      } else {
+        if (synchronization_label != current_synchronization_label)
+          throw status_exception("Synchronization label mismatch.");
+      }
+      timespans.emplace_back(synchronization_label, _timespan);
+    }
+  }; // inner struct Lane
+
+ private:
+  std::unordered_set<std::string> enabled_synchronization_labels;
+
+  bool strong_synchronization = false;
+
+ public:
+  Lane execution_lane;
+  Lane transferring_lane;
+
+ protected:
+  void analyzeSynchronization() {
+    auto ptrans = transferring_lane.timespans.rbegin();
+
+    long total_execution_time = 0;
+    for (auto pexec = execution_lane.timespans.rbegin();
+         pexec != execution_lane.timespans.rend();
+         ++pexec) {
+      if (pexec->second.synchronization) {
+        auto penabled =
+            enabled_synchronization_labels.find(pexec->second.target);
+        if (penabled == enabled_synchronization_labels.end())
+          continue;
+      } else {
+        total_execution_time += pexec->second.span;
+        continue;
+      }
+
+      // Synchronize execution and transferring lane.
+      long total_transferring_time = 0;
+      while (ptrans != transferring_lane.timespans.rend()) {
+        if (ptrans->second.synchronization) {
+          auto penabled =
+              enabled_synchronization_labels.find(ptrans->second.target);
+          if (penabled != enabled_synchronization_labels.end())
+            break;
+        } else
+          total_transferring_time += ptrans->second.span;
+        ++ptrans;
+      }
+      if (ptrans != transferring_lane.timespans.rend())
+        assert(ptrans->second.target == pexec->second.target);
+      if (total_execution_time >= total_transferring_time) {
+        ptrans->second.span = total_execution_time - total_transferring_time;
+        total_execution_time = 0;
+      } else {
+        ptrans->second.span = 0;
+        total_execution_time = strong_synchronization
+            ? (total_execution_time - total_transferring_time)
+            : 0;
+      }
+      ++ptrans;
+    }
+  }
+
+  void generateTimepoint() {
+    long current_timepoint = 0;
+    for (auto p = execution_lane.timespans.begin();
+         p != execution_lane.timespans.end();
+         ++p) {
+      p->second.timepoint = current_timepoint;
+      current_timepoint += p->second.span;
+    }
+    for (auto p = transferring_lane.timespans.rbegin();
+         p != transferring_lane.timespans.rend();
+         ++p) {
+      current_timepoint -= p->second.span;
+      p->second.timepoint = current_timepoint;
+    }
+  }
+
+ public:
+  TimeModel() {
+    execution_lane.synchronization_type = Direction::prev;
+    transferring_lane.synchronization_type = Direction::post;
+  }
+
+  inline void submitExecutionSynchronization(
+      const std::string& synchronization_label) {
+    execution_lane.submitSynchronizationLabel(synchronization_label);
+  }
+  inline void submitExecutionTimespan(
+      const std::string& synchronization_label,
+      const Timespan& timespan) {
+    execution_lane.submitTimespan(synchronization_label, timespan);
+  }
+  inline void submitTransferringSynchronization(
+      const std::string& synchronization_label) {
+    transferring_lane.submitSynchronizationLabel(synchronization_label);
+  }
+  inline void submitTransferringTimespan(
+      const std::string& synchronization_label,
+      const Timespan& timespan) {
+    transferring_lane.submitTimespan(synchronization_label, timespan);
+  }
+
+  void setSynchronizationEnabled(const std::string& _label) {
+    enabled_synchronization_labels.insert(_label);
+  }
+
+  inline bool isStrongSynchronization() const {
+    return strong_synchronization;
+  }
+  void setStrongSynchronization(bool _strong_synchronization) {
+    strong_synchronization = _strong_synchronization;
+  }
+
+  void analyze() {
+    analyzeSynchronization();
+    generateTimepoint();
+  }
+}; // struct TimeModel
 
 } // namespace decisions
 } // namespace mori
@@ -3286,19 +3802,15 @@ namespace mori {
 
 struct MemoryScheduler {
  protected:
-  const Context& context;
+  const Context::View& context;
   status::MemoryStatus& status;
   events::Events& events;
 
   events::ScheduleEvents schedule_events;
 
- public:
-  MemoryScheduler(
-      const Context& _context,
-      status::MemoryStatus& _status,
-      events::Events& _events)
-      : context(_context), status(_status), events(_events) {}
+  std::atomic<int> current_iteration = 0;
 
+ protected:
   /**
    * Action when the scheduling is triggered.
    */
@@ -3311,19 +3823,37 @@ struct MemoryScheduler {
   virtual void onMemoryEvent(const events::MemoryEvent& event) = 0;
 
   /**
+   * Action when new execution event is submitted.
+   * @param event The submitted event
+   */
+  virtual void onMemoryEvent(const events::ExecutionEvent& event) = 0;
+
+  /**
    * Action when an iteration starts.
    */
   virtual void onNewIteration() = 0;
 
+ public:
+  MemoryScheduler(
+      const Context::View& _context,
+      status::MemoryStatus& _status,
+      events::Events& _events)
+      : context(_context), status(_status), events(_events) {}
+
   inline events::ScheduleEvents getScheduleEvents() {
+    onSchedule();
     return schedule_events;
   }
 
   void submitEvent(events::MemoryEvent event) {
     onMemoryEvent(event);
   }
+  void submitEvent(events::ExecutionEvent event) {
+    onMemoryEvent(event);
+  }
 
   void newIteration() {
+    ++current_iteration;
     onNewIteration();
   }
 
@@ -3331,186 +3861,597 @@ struct MemoryScheduler {
 
 }; // struct MemoryScheduler
 
-struct FIFOMemoryScheduler : public MemoryScheduler {
- private:
-  bool model_decided = false;
+struct EventBasedMemoryScheduler : public MemoryScheduler {
+ protected:
   bool event_decided = false;
 
-  decisions::Model model;
-
- protected:
-  void analyze() {
-    model.setMemoryInfo(status.getMemoryInfo());
-    model.analyze(status);
-    schedule_events.memory_map = model.getMemoryMap();
-
-    model_decided = true;
-  }
-
- public:
-  FIFOMemoryScheduler(
-      const Context& _context,
-      status::MemoryStatus& _status,
-      events::Events& _events)
-      : MemoryScheduler(_context, _status, _events) {}
+  virtual void preAnalyzeEvents() = 0;
+  virtual std::unordered_set<std::string> analyzeForwardEvents(
+      const events::EventSet<events::MemoryEvent>&) = 0;
+  virtual void analyzeBackwardEvents(
+      const events::EventSet<events::MemoryEvent>&,
+      const std::unordered_set<std::string>&) = 0;
+  virtual void postAnalyzeEvents() = 0;
 
   virtual void onSchedule() override {
-    return;
-    if (!model_decided)
-      analyze();
-    if (model.getLayerCount() == 1)
+    if (event_decided)
       return;
 
-    // Prepare memory events
-    auto iter_1_res = events.select()
-                          .where([](const events::EventSet::item& item) {
-                            return item.first == 1;
-                          })
-                          .get();
-
-    if (iter_1_res.size() == 0)
+    auto iter_1_mem_res =
+        events.from_memory_events()
+            .where([](const events::EventSet<events::MemoryEvent>::item& item) {
+              // return item.first == (current_iteration - 1);
+              return item.first == 1;
+            })
+            .get();
+    if (iter_1_mem_res.empty())
       return;
 
-    auto iter_1_forward_res =
-        iter_1_res.select()
-            .where([](const events::EventSet::item& item) {
+    auto iter_1_forward_mem_res =
+        iter_1_mem_res.select()
+            .where([](const events::EventSet<events::MemoryEvent>::item& item) {
               return item.second.stage == ApplicationStage::forward;
             })
             .get();
 
-    // Generate swapout events based on analysis model.
-    std::vector<status::TensorPres> tensors_swap;
-    std::unordered_map<std::string, std::vector<events::ScheduleEvent>>
-        events_swapout;
-    for (auto& l : model.getLayers()) {
-      for (auto& s : l.regions) {
-        const decisions::Node& node = model.getMemoryNode(s);
-        if (node.posts.empty())
-          continue; // No need to swapout tensor.
-        status::TensorPres tensor = status.referenceTensor(s);
-        tensors_swap.emplace_back(std::move(tensor));
-        for (auto& x : node.region.sections) {
-          // Generate copyout and freehost events.
-          auto iter_1_tensor_forward_res =
-              iter_1_forward_res.select()
-                  .where([s](const events::EventSet::item& item) {
-                    return item.second.tensor == s;
-                  })
-                  .get();
-
-          std::string last_acquired;
-          std::string last_assigned;
-          for (auto& y : iter_1_tensor_forward_res.ref()) {
-            switch (y->second.type) {
-              case events::MemoryEventType::read:
-                last_acquired = y->second.op;
-                break;
-              case events::MemoryEventType::write:
-              case events::MemoryEventType::access:
-                last_assigned = y->second.op;
-                break;
-              default:
-                break;
-            }
-          }
-
-          // events_swapout[last_assigned].emplace_back(tensor.getOperatorName(),
-          // s, x, events::ScheduleEventType::copyout, last_assigned);
-          events_swapout[last_acquired].emplace_back(
-              tensor.getOperatorName(),
-              s,
-              x,
-              events::ScheduleEventType::swapout,
-              last_acquired);
-        }
-      }
-    }
-
-    for (auto& s : status.getExecutionOrder()) {
-      if (events_swapout.find(s) == events_swapout.end())
-        continue;
-      for (auto& x : events_swapout.at(s)) {
-        schedule_events.forward_schedule_events.execution.push_back(x);
-      }
-    }
-
-    auto iter_1_backward_res =
-        iter_1_res.select()
-            .where([](const events::EventSet::item& item) {
+    auto iter_1_backward_mem_res =
+        iter_1_mem_res.select()
+            .where([](const events::EventSet<events::MemoryEvent>::item& item) {
               return item.second.stage == ApplicationStage::backward;
             })
             .get();
 
-    for (auto& x : tensors_swap) {
-      // Get the first access of this tensor in backword stage
-      auto target_tensor_backward_res =
-          iter_1_backward_res.select()
-              .where([&x](const events::EventSet::item& item) {
-                return item.second.tensor == x.getName() &&
-                    item.second.type != events::MemoryEventType::swapin &&
-                    item.second.type != events::MemoryEventType::swapout;
-              })
-              .get();
-
-      auto opb = (*target_tensor_backward_res.ref().begin())->second.op;
-      for (int i = 0; i < 1; ++i) {
-        opb = status.getExecutionPost(opb);
-        if (opb == "")
-          break;
-      }
-
-      // Generate swapin event
-      if (opb != "")
-        schedule_events.backward_schedule_events.execution.emplace(
-            schedule_events.backward_schedule_events.execution.begin(),
-            x.getOperatorName(),
-            x.getName(),
-            x.getSize(),
-            events::ScheduleEventType::swapin,
-            opb);
-    }
+    preAnalyzeEvents();
+    auto tensors_swapped = analyzeForwardEvents(iter_1_forward_mem_res);
+    analyzeBackwardEvents(iter_1_backward_mem_res, tensors_swapped);
+    postAnalyzeEvents();
 
     event_decided = true;
   }
 
-  virtual void onMemoryEvent(const events::MemoryEvent& event) override {}
+  virtual void onMemoryEvent(const events::MemoryEvent& event) override {
+    if (!event_decided)
+      return;
 
-  virtual void onNewIteration() override {
-    onSchedule();
+    if (event.stage == ApplicationStage::forward &&
+        event.type == events::MemoryEventType::swapin) {
+      // Indicate schedule error.
+      assert(true);
+    }
   }
 
-  virtual ~FIFOMemoryScheduler() = default;
+  virtual void onMemoryEvent(const events::ExecutionEvent& event) override {}
+  virtual void onNewIteration() override {}
 
-}; // struct FIFOMemoryScheduler
-
-struct DependencyAwareMemoryScheduler : public MemoryScheduler {
-  DependencyAwareMemoryScheduler(
-      const Context& _context,
+ public:
+  EventBasedMemoryScheduler(
+      const Context::View& _context,
       status::MemoryStatus& _status,
       events::Events& _events)
       : MemoryScheduler(_context, _status, _events) {}
+  virtual ~EventBasedMemoryScheduler() = default;
+}; // struct EventBasedMemoryScheduler
 
-  virtual void onSchedule() override {}
-  virtual void onMemoryEvent(const events::MemoryEvent& event) override {}
-  virtual void onNewIteration() override {}
+struct FIFOMemoryScheduler : public EventBasedMemoryScheduler {
+ protected:
+  virtual void preAnalyzeEvents() override {}
+  virtual std::unordered_set<std::string> analyzeForwardEvents(
+      const events::EventSet<events::MemoryEvent>& iter_1_forward_mem_res)
+      override {
+    auto iter_1_forward_swapout_res =
+        iter_1_forward_mem_res.select()
+            .where([](const events::EventSet<events::MemoryEvent>::item& item) {
+              return item.second.type == events::MemoryEventType::swapout;
+            })
+            .get();
+    // No need to swap.
+    if (iter_1_forward_swapout_res.empty())
+      return std::unordered_set<std::string>();
+
+    size_t unmet_memory_requirement = 0;
+    size_t released_memory_requirement = 0;
+    for (auto& x : iter_1_forward_swapout_res.ref())
+      unmet_memory_requirement += x->second.size;
+
+    std::unordered_set<std::string> tensors_swapped;
+    // Tensors to swapout.
+    for (auto& s : status.getExecutionOrder()) {
+      status::OperatorPres op_pres = status.referenceOperator(s);
+      // Forward propagation and backward propagation share the same set of
+      // operators.
+      if (op_pres.isBackwardPropagation())
+        continue;
+
+      for (auto& tensor_name : op_pres.getTensors()) {
+        status::TensorPres tensor_pres = status.referenceTensor(tensor_name);
+        // Do not swap out persistant tensors.
+        if (tensor_pres.isPersistent() || tensor_pres.isTransient())
+          continue;
+
+        // Get the last access of this tensor in forward stage.
+        auto iter_1_tensor_forward_res =
+            iter_1_forward_mem_res.select()
+                .where([&tensor_name](
+                           const events::EventSet<events::MemoryEvent>::item&
+                               item) {
+                  return item.second.tensor == tensor_name &&
+                      item.second.type != events::MemoryEventType::swapin &&
+                      item.second.type != events::MemoryEventType::swapout;
+                })
+                .get();
+
+        bool forward_event_generated = false;
+        std::string last_acquired;
+        std::string last_assigned;
+        for (auto& y : iter_1_tensor_forward_res.ref()) {
+          switch (y->second.type) {
+            case events::MemoryEventType::allocate:
+              // Tensor allocated in forward propagation, swapout event should
+              // be generated.
+              forward_event_generated = true;
+            case events::MemoryEventType::read:
+              last_acquired = y->second.op;
+              break;
+            case events::MemoryEventType::write:
+            case events::MemoryEventType::access:
+              last_assigned = y->second.op;
+              break;
+            case events::MemoryEventType::free:
+              // Tensor released in forward propagation, swapout event should
+              // not be generated.
+              forward_event_generated = false;
+            default:
+              break;
+          }
+        }
+
+        if (!forward_event_generated)
+          continue;
+
+        tensors_swapped.insert(tensor_name);
+        // Generate swapout event
+        // schedule_events.forward_schedule_events.execution[last_assigned].emplace_back(tensor_pres.getOperatorName(),
+        // tensor_pres.getName(), tensor_pres.getSize(),
+        // events::ScheduleEventType::copyout, last_assigned);
+        schedule_events.forward_schedule_events.execution[last_acquired]
+            .emplace_back(
+                tensor_pres.getOperatorName(),
+                tensor_pres.getName(),
+                tensor_pres.getSize(),
+                events::ScheduleEventType::swapout,
+                last_acquired);
+        released_memory_requirement += tensor_pres.getSize();
+
+        // if (unmet_memory_requirement <= released_memory_requirement) break;
+      }
+    }
+
+    return tensors_swapped;
+  }
+  virtual void postAnalyzeEvents() override {}
+
+ public:
+  FIFOMemoryScheduler(
+      const Context::View& _context,
+      status::MemoryStatus& _status,
+      events::Events& _events)
+      : EventBasedMemoryScheduler(_context, _status, _events) {}
+}; // struct FIFOMemoryScheduler
+
+struct ExecutionTimeAwareMemoryScheduler : public FIFOMemoryScheduler {
+ protected:
+  decisions::TimeModel time_model;
+  decisions::TransferringModel transferring_model;
+
+  std::unordered_map<std::string, long> execution_timespans;
+
+ protected:
+  virtual void preAnalyzeEvents() override {
+    auto iter_1_backward_res =
+        events.from_execution_events()
+            .where(
+                [](const events::EventSet<events::ExecutionEvent>::item& item) {
+                  // return item.first == (current_iteration - 1);
+                  return item.first == 1 &&
+                      item.second.stage == ApplicationStage::backward;
+                })
+            .get();
+    // No memory events.
+    if (iter_1_backward_res.empty())
+      return;
+
+    auto iter_1_backward_request_res =
+        iter_1_backward_res.select()
+            .where(
+                [](const events::EventSet<events::ExecutionEvent>::item& item) {
+                  return item.second.type ==
+                      events::ExecutionEventType::request;
+                })
+            .get();
+    auto iter_1_backward_release_res =
+        iter_1_backward_res.select()
+            .where(
+                [](const events::EventSet<events::ExecutionEvent>::item& item) {
+                  return item.second.type ==
+                      events::ExecutionEventType::release;
+                })
+            .get();
+
+    std::unordered_map<std::string, long> request_timepoints;
+    std::unordered_map<std::string, long> release_timepoints;
+
+    for (auto& x : iter_1_backward_request_res.ref())
+      request_timepoints[x->second.op] =
+          utils::get_timestamp_val(x->second.timestamp);
+    for (auto& x : iter_1_backward_release_res.ref())
+      release_timepoints[x->second.op] =
+          utils::get_timestamp_val(x->second.timestamp);
+    assert(request_timepoints.size() == release_timepoints.size());
+
+    for (auto& s : status.getExecutionOrder()) {
+      status::OperatorPres operator_pres = status.referenceOperator(s);
+      if (!operator_pres.isBackwardPropagation())
+        continue;
+      if (request_timepoints.count(s) != 1 || release_timepoints.count(s) != 1)
+        continue;
+
+      execution_timespans.emplace(
+          s, release_timepoints.at(s) - request_timepoints.at(s));
+      decisions::TimeModel::Timespan timespan(
+          s, release_timepoints.at(s) - request_timepoints.at(s));
+      time_model.submitExecutionSynchronization(s);
+      time_model.submitExecutionTimespan(s, timespan);
+    }
+  }
+
+ public:
+  ExecutionTimeAwareMemoryScheduler(
+      const Context::View& _context,
+      status::MemoryStatus& _status,
+      events::Events& _events)
+      : FIFOMemoryScheduler(_context, _status, _events) {
+    time_model.setStrongSynchronization(false);
+  }
+  virtual ~ExecutionTimeAwareMemoryScheduler() = default;
+}; // struct ExecutionTimeAwareMemoryScheduler
+
+struct SectionAwareMemoryScheduler : public ExecutionTimeAwareMemoryScheduler {
+ private:
+  bool layout_model_decided = false;
+
+  decisions::LayoutModel layout_model;
+
+ protected:
+  void analyzeLayoutModel() {
+    layout_model.setMemoryInfo(status.getMemoryInfo());
+    layout_model.analyze(status);
+    schedule_events.memory_map = layout_model.getMemoryMap();
+
+    layout_model_decided = true;
+  }
+
+  virtual void preAnalyzeEvents() override {
+    if (!layout_model_decided)
+      analyzeLayoutModel();
+    if (layout_model.getLayerCount() == 1)
+      return; // No need of memory swapping.
+    ExecutionTimeAwareMemoryScheduler::preAnalyzeEvents();
+  }
+
+  virtual std::unordered_set<std::string> analyzeForwardEvents(
+      const events::EventSet<events::MemoryEvent>& iter_1_forward_mem_res)
+      override {
+    std::unordered_set<std::string> tensors_swapped;
+
+    auto iter_1_forward_swapout_res =
+        iter_1_forward_mem_res.select()
+            .where([](const events::EventSet<events::MemoryEvent>::item& item) {
+              return item.second.type == events::MemoryEventType::swapout;
+            })
+            .get();
+    // No need to swap.
+    if (iter_1_forward_swapout_res.empty())
+      return tensors_swapped;
+
+    size_t unmet_memory_requirement = 0;
+    size_t released_memory_requirement = 0;
+    for (auto& x : iter_1_forward_swapout_res.ref())
+      unmet_memory_requirement += x->second.size;
+
+    // Generate swapout events based on analysis model.
+    // All tensors are accessed in forward propagation.
+
+    for (auto& l : layout_model.getLayers()) {
+      for (auto& s : l.regions) {
+        const decisions::LayoutModel::Node& node =
+            layout_model.getMemoryNode(s);
+        if (node.posts.empty())
+          continue; // No need to swapout tensor.
+
+        // Generate copyout and freehost events.
+        auto iter_1_tensor_forward_res =
+            iter_1_forward_mem_res.select()
+                .where([s](const events::EventSet<events::MemoryEvent>::item&
+                               item) { return item.second.tensor == s; })
+                .get();
+
+        bool forward_event_generated = false;
+        std::string last_acquired;
+        std::string last_assigned;
+        for (auto& y : iter_1_tensor_forward_res.ref()) {
+          switch (y->second.type) {
+            case events::MemoryEventType::allocate:
+              // Tensor allocated in forward propagation, swapout event should
+              // be generated.
+              forward_event_generated = true;
+            case events::MemoryEventType::read:
+              last_acquired = y->second.op;
+              break;
+            case events::MemoryEventType::write:
+            case events::MemoryEventType::access:
+              last_assigned = y->second.op;
+              break;
+            case events::MemoryEventType::free:
+              // Tensor released in forward propagation, swapout event should
+              // not be generated.
+              forward_event_generated = false;
+            default:
+              break;
+          }
+        }
+
+        if (!forward_event_generated)
+          continue;
+
+        tensors_swapped.insert(s);
+        status::TensorPres pres = status.referenceTensor(s);
+        for (auto& x : node.region.sections) {
+          // schedule_events.forward_schedule_events.execution[last_assigned].emplace_back(pres.getOperatorName(),
+          // s, x, events::ScheduleEventType::copyout, last_acquired);
+          schedule_events.forward_schedule_events.execution[last_acquired]
+              .emplace_back(
+                  pres.getOperatorName(),
+                  s,
+                  x,
+                  events::ScheduleEventType::swapout,
+                  last_acquired);
+          released_memory_requirement += x;
+        }
+
+        // if (unmet_memory_requirement <= released_memory_requirement) break;
+      }
+    }
+    return tensors_swapped;
+  }
+  virtual void analyzeBackwardEvents(
+      const events::EventSet<events::MemoryEvent>& iter_1_backward_mem_res,
+      const std::unordered_set<std::string>& tensors_swapped) override {
+    auto iter_1_backward_access_res =
+        iter_1_backward_mem_res.select()
+            .where([](const events::EventSet<events::MemoryEvent>::item& item) {
+              if (item.second.type == events::MemoryEventType::allocate)
+                return false;
+              if (item.second.type == events::MemoryEventType::free)
+                return false;
+              return item.second.type != events::MemoryEventType::swapin &&
+                  item.second.type != events::MemoryEventType::swapout;
+            })
+            .get();
+
+    for (auto& s : status.getExecutionOrder()) {
+      auto op_pres = status.referenceOperator(s);
+      if (!op_pres.isBackwardPropagation())
+        continue;
+
+      auto target_operator_backward_res =
+          iter_1_backward_access_res.select()
+              .where(
+                  [&s, &tensors_swapped](
+                      const events::EventSet<events::MemoryEvent>::item& item) {
+                    if (item.second.op != s)
+                      return false;
+                    return tensors_swapped.find(item.second.tensor) !=
+                        tensors_swapped.end();
+                  })
+              .get();
+      if (target_operator_backward_res.empty())
+        continue;
+
+      for (auto& x : target_operator_backward_res.ref()) {
+        status::TensorPres tensor_pres =
+            status.referenceTensor(x->second.tensor);
+        decisions::TimeModel::Timespan timespan(
+            x->second.tensor,
+            transferring_model.analyze(tensor_pres.getSize()));
+        time_model.submitTransferringTimespan(s, timespan);
+      }
+      time_model.submitTransferringSynchronization(s);
+      time_model.setSynchronizationEnabled(s);
+    }
+
+    time_model.analyze();
+
+    for (auto& x : time_model.transferring_lane.timespans) {
+      if (x.second.synchronization)
+        continue;
+      status::TensorPres pres = status.referenceTensor(x.second.target);
+      // Generate swapin event
+      schedule_events.backward_schedule_events.timepoint.emplace_back(
+          pres.getOperatorName(),
+          pres.getName(),
+          pres.getSize(),
+          events::ScheduleEventType::copyin,
+          x.second.timepoint);
+    }
+  }
+
+ public:
+  SectionAwareMemoryScheduler(
+      const Context::View& _context,
+      status::MemoryStatus& _status,
+      events::Events& _events)
+      : ExecutionTimeAwareMemoryScheduler(_context, _status, _events) {
+    time_model.setStrongSynchronization(true);
+  }
+  virtual ~SectionAwareMemoryScheduler() = default;
+}; // struct SectionAwareMemoryScheduler
+
+struct DependencyAwareMemoryScheduler
+    : public ExecutionTimeAwareMemoryScheduler {
+ private:
+  struct TensorRelation {
+    std::string current_operator = "";
+    bool schedule_changed = false;
+    int position = 0;
+
+    TensorRelation(const std::string op)
+        : current_operator(op), schedule_changed(false), position(0) {}
+  }; // inner struct TensorRelation
+
+ private:
+  std::unordered_map<std::string, TensorRelation> tensor_operator_relations;
+  std::unordered_set<std::string> tensor_swapout_this_iter;
+
+  bool time_aware = true;
+  size_t thershold = 2;
+
+ public:
+  DependencyAwareMemoryScheduler(
+      const Context::View& _context,
+      status::MemoryStatus& _status,
+      events::Events& _events)
+      : ExecutionTimeAwareMemoryScheduler(_context, _status, _events) {
+    time_aware = context.signal("dependency.timeaware");
+    thershold = std::stoul(context.at("dependency.thershold"));
+  }
+
+  virtual void analyzeBackwardEvents(
+      const events::EventSet<events::MemoryEvent>& iter_1_backward_mem_res,
+      const std::unordered_set<std::string>& tensors_swapped) override {
+    auto iter_1_backward_access_res =
+        iter_1_backward_mem_res.select()
+            .where([](const events::EventSet<events::MemoryEvent>::item& item) {
+              if (item.second.type == events::MemoryEventType::allocate)
+                return false;
+              if (item.second.type == events::MemoryEventType::free)
+                return false;
+              return item.second.type != events::MemoryEventType::swapin &&
+                  item.second.type != events::MemoryEventType::swapout;
+            })
+            .get();
+
+    // Generate swap events.
+    for (auto& x : tensors_swapped) {
+      // Get the first access of this tensor in backword stage
+      auto target_tensor_backward_res =
+          iter_1_backward_access_res.select()
+              .where(
+                  [&x](
+                      const events::EventSet<events::MemoryEvent>::item& item) {
+                    return item.second.tensor == x;
+                  })
+              .get();
+
+      if (target_tensor_backward_res.ref().empty())
+        continue;
+
+      status::TensorPres pres = status.referenceTensor(x);
+      std::string opb = (*target_tensor_backward_res.ref().begin())->second.op;
+      size_t execution_time = 0;
+      size_t transfer_time = transferring_model.analyze(pres.getSize());
+      for (int i = 0; i < thershold + 1; ++i) {
+        if (!status.hasExecutionPrev(opb))
+          break;
+        opb = status.getExecutionPrev(opb);
+        assert(opb != "");
+        if (!time_aware)
+          continue;
+        if (execution_time >= transfer_time)
+          break;
+        execution_time += execution_timespans[opb];
+      }
+
+      assert(opb != "");
+      // Generate swapin event
+      schedule_events.backward_schedule_events.execution[opb].emplace_back(
+          pres.getOperatorName(),
+          pres.getName(),
+          pres.getSize(),
+          events::ScheduleEventType::copyin,
+          opb);
+      tensor_operator_relations.emplace(pres.getName(), opb);
+    }
+  }
+  virtual void onMemoryEvent(const events::MemoryEvent& event) override {
+    FIFOMemoryScheduler::onMemoryEvent(event);
+
+    if (!time_aware)
+      return;
+
+    if (event.stage == ApplicationStage::backward &&
+        (event.type == events::MemoryEventType::swapin ||
+         event.type == events::MemoryEventType::swapout)) {
+      // Indicate swapping in too late or too early
+      auto p = tensor_operator_relations.find(event.tensor);
+      if (p == tensor_operator_relations.end())
+        return;
+
+      // Indicate schedule already adjusted with no benefits
+      if (p->second.position == 0 && p->second.schedule_changed)
+        return;
+
+      // Indicate this tensor is swapped in after swapped out in backward
+      // propagation
+      if (tensor_swapout_this_iter.find(event.tensor) !=
+          tensor_swapout_this_iter.end())
+        return;
+
+      auto& schedule_events_set =
+          schedule_events.backward_schedule_events.execution;
+      auto q = std::find_if(
+          schedule_events_set[p->second.current_operator].begin(),
+          schedule_events_set[p->second.current_operator].end(),
+          [event](const events::ScheduleEvent& _event) {
+            return _event.tensor_name == event.tensor;
+          });
+      assert(q != schedule_events_set[p->second.current_operator].end());
+
+      std::string opb = "";
+      if (event.type == events::MemoryEventType::swapin) {
+        if (p->second.position == -4)
+          return;
+        if (!status.hasExecutionPrev(p->second.current_operator))
+          return;
+        opb = status.getExecutionPrev(p->second.current_operator);
+        p->second.position -= 1;
+      } else {
+        if (p->second.position == 4)
+          return;
+        if (!status.hasExecutionPost(p->second.current_operator))
+          return;
+        opb = status.getExecutionPost(p->second.current_operator);
+        p->second.position += 1;
+        tensor_swapout_this_iter.insert(event.tensor);
+      }
+      // Cannot solve this schedule problem.
+      assert(opb != "");
+
+      events::ScheduleEvent new_event = *q;
+      new_event.operator_name = opb;
+      schedule_events_set[opb].push_back(new_event);
+      schedule_events_set[p->second.current_operator].erase(q);
+
+      p->second.current_operator = opb;
+      p->second.schedule_changed = true;
+    }
+  }
+  virtual void onNewIteration() override {
+    tensor_swapout_this_iter.clear();
+  }
 
   virtual ~DependencyAwareMemoryScheduler() = default;
 
 }; // struct DependencyAwareMemoryScheduler
-
-struct MaximumSizePriorityMemoryScheduler : public MemoryScheduler {
-  MaximumSizePriorityMemoryScheduler(
-      const Context& _context,
-      status::MemoryStatus& _status,
-      events::Events& _events)
-      : MemoryScheduler(_context, _status, _events) {}
-
-  virtual void onSchedule() override {}
-  virtual void onMemoryEvent(const events::MemoryEvent& event) override {}
-  virtual void onNewIteration() override {}
-
-  virtual ~MaximumSizePriorityMemoryScheduler() = default;
-}; // struct MaximumSizePriorityMemoryScheduler
 
 } // namespace mori
 
@@ -3532,9 +4473,12 @@ struct BasicBackend final : public Backend {
   events::Events events;
   std::unique_ptr<exporter::EventsExporter> events_exporter;
   void* events_exporter_hinst = nullptr;
+  std::mutex events_m;
 
   std::unique_ptr<MemoryScheduler> scheduler;
   void* scheduler_hinst = nullptr;
+  std::unique_ptr<exporter::ScheduleExporter> schedule_exporter;
+  void* schedule_exporter_hinst = nullptr;
 
   std::atomic<bool> inited = false;
   std::atomic<bool> started = false;
@@ -3550,21 +4494,21 @@ struct BasicBackend final : public Backend {
 
     // Set up scheduler
     std::string scheduler_name = context.at("scheduler");
-    if (scheduler_name == "fifo")
+    Context::View scheduler_context = context.view("scheduler");
+    if (scheduler_name == "section")
       scheduler = std::unique_ptr<MemoryScheduler>(
-          new FIFOMemoryScheduler(context, status, events));
+          new SectionAwareMemoryScheduler(scheduler_context, status, events));
     else if (scheduler_name == "dependency")
-      scheduler = std::unique_ptr<MemoryScheduler>(
-          new DependencyAwareMemoryScheduler(context, status, events));
-    else if (scheduler_name == "maxsize")
-      scheduler = std::unique_ptr<MemoryScheduler>(
-          new MaximumSizePriorityMemoryScheduler(context, status, events));
+      scheduler =
+          std::unique_ptr<MemoryScheduler>(new DependencyAwareMemoryScheduler(
+              scheduler_context, status, events));
     else
       scheduler_hinst = utils::load_dylib(
           "Scheduler",
           context.at("scheduler.path"),
           "scheduler_entry",
-          scheduler);
+          scheduler,
+          scheduler_context);
 
     // Set up events exporter
     std::string events_exporter_name = context.at("exporters.events");
@@ -3591,6 +4535,19 @@ struct BasicBackend final : public Backend {
           "tensors_exporter_entry",
           tensors_exporter,
           context.view("exporters.tensors"));
+
+    // Set up schedule exporter
+    std::string schedule_exporter_name = context.at("exporters.schedule");
+    if (schedule_exporter_name == "empty")
+      schedule_exporter = std::unique_ptr<exporter::ScheduleExporter>(
+          new exporter::ScheduleExporter(context.view("exporters.schedule")));
+    else
+      schedule_exporter_hinst = utils::load_dylib(
+          "Schedule Exporter",
+          context.at("exporters.schedule.path"),
+          "schedule_exporter_entry",
+          schedule_exporter,
+          context.view("exporters.schedule"));
   }
 
   virtual void init() override {
@@ -3605,15 +4562,7 @@ struct BasicBackend final : public Backend {
   virtual void submitMemoryStatus(
       const status::MemoryStatus& _status) override {
     status = _status;
-    for (auto& s : status.getTensors()) {
-      status::TensorPres pres = status.referenceTensor(s);
-      tensors_exporter->onTensor(pres.get());
-    }
-    for (auto& s : status.getOperators()) {
-      status::OperatorPres pres = status.referenceOperator(s);
-      tensors_exporter->onOperator(pres.get());
-    }
-    tensors_exporter->onEntry(status.getEntry());
+    tensors_exporter->onTensors(status);
   }
 
   virtual void start() override {
@@ -3645,19 +4594,23 @@ struct BasicBackend final : public Backend {
     if (!started)
       throw uninited_exception();
 
-    // switch (event.type) {
-    //     case events::MemoryEventType::allocate:
-    //         status.recordMemoryAllocateEvent(event.tensor);
-    //         break;
-    //     case events::MemoryEventType::free:
-    //         status.recordMemoryFreeEvent(event.tensor);
-    //         break;
-    //     default:
-    //         break;
-    // }
-
+    std::unique_lock<std::mutex> l{events_m};
     events.submitEvent(event);
-    events_exporter->onEvent(event);
+    events_exporter->onMemoryEvent(event);
+    l.unlock();
+    scheduler->submitEvent(event);
+  }
+
+  virtual void submitEvent(const events::ExecutionEvent& event) override {
+    if (!inited)
+      throw uninited_exception();
+    if (!started)
+      throw uninited_exception();
+
+    std::unique_lock<std::mutex> l{events_m};
+    events.submitEvent(event);
+    events_exporter->onExecutionEvent(event);
+    l.unlock();
     scheduler->submitEvent(event);
   }
 
@@ -3672,7 +4625,8 @@ struct BasicBackend final : public Backend {
       status::TensorPres pres = status.referenceTensor(x.first);
       pres.setFragment(x.second);
     }
-    return scheduler->getScheduleEvents();
+    schedule_exporter->onScheduleEvents(re);
+    return re;
   }
 
   /**
@@ -3783,6 +4737,7 @@ struct BackendHandle {
   virtual void start() {}
 
   virtual void submitEvent(const events::MemoryEvent& event) = 0;
+  virtual void submitEvent(const events::ExecutionEvent& event) = 0;
   virtual events::ScheduleEvents getScheduleEvents() = 0;
 
   virtual void setIteration(int _iteration) = 0;
@@ -3828,8 +4783,11 @@ struct LocalBackendHandle : public BackendHandle {
   }
 
   virtual void submitEvent(const events::MemoryEvent& event) override {
-    (*logger) << LogLevel::info << "Submiting of event " << event;
-    logger->flush();
+    (*logger) << LogLevel::debug << "Submiting of event " << event << endl;
+    backend->submitEvent(event);
+  }
+  virtual void submitEvent(const events::ExecutionEvent& event) override {
+    (*logger) << LogLevel::debug << "Submiting of event " << event << endl;
     backend->submitEvent(event);
   }
 
@@ -4100,7 +5058,7 @@ struct MemoryOperationExecutor final {
           break;
       }
     }
-    void copyOut(status::TensorPres& tensor, size_t size) override {
+    virtual void copyOut(status::TensorPres& tensor, size_t size) override {
       if (tensor.getSize() < size)
         throw status::tensor_invalid(
             "Copying out size larger than tensor size.");
@@ -4293,8 +5251,9 @@ struct MemoryOperationExecutor final {
 
             // Process memory section merging.
             if (tensor.isMergeable(section->offset)) {
-              assert(executor.memory_manager->merge(
-                  device_address, (uint8_t*)device_address + section->size));
+              bool res = executor.memory_manager->merge(
+                  device_address, (uint8_t*)device_address + section->size);
+              assert(res);
               executor.layout.recordMemoryMergeEvent(
                   device_address, (uint8_t*)device_address + section->size);
               tensor.merge(section->offset);
@@ -4302,16 +5261,15 @@ struct MemoryOperationExecutor final {
             const status::MemorySection* section_prev = section->prev();
             if (section_prev != nullptr &&
                 tensor.isMergeable(section_prev->offset)) {
-              assert(executor.memory_manager->merge(
-                  section_prev->device_address, device_address));
+              bool res = executor.memory_manager->merge(
+                  section_prev->device_address, device_address);
+              assert(res);
               executor.layout.recordMemoryMergeEvent(
                   section_prev->device_address, device_address);
               section = &(tensor.merge(section_prev->offset));
             }
-          }
-          case status::MemoryStatusType::coexist:
-          case status::MemoryStatusType::empty:
             copied_size += section->size;
+          }
           default:
             break;
         }
@@ -4370,7 +5328,6 @@ struct MemoryOperationExecutor final {
       const status::MemorySection* section = &(tensor.getFirstSection());
       do {
         switch (section->status) {
-          case status::MemoryStatusType::device:
           case status::MemoryStatusType::coexist:
           case status::MemoryStatusType::empty: {
             executor.layout.recordMemoryFreeEvent(section->device_address);
@@ -4403,7 +5360,7 @@ struct MemoryOperationExecutor final {
       if (tensor.getSize() < size)
         throw status::tensor_invalid("Freeing size larger than tensor size.");
       size_t freed_size = 0;
-      const status::MemorySection* section = &(tensor.getFirstSection());
+      const status::MemorySection* section = &(tensor.getLastSection());
       do {
         switch (section->status) {
           case status::MemoryStatusType::host:
@@ -4413,8 +5370,9 @@ struct MemoryOperationExecutor final {
             freed_size += section->size;
             if (tensor.isMergeable(section->offset)) {
               if (section->status != status::MemoryStatusType::none) {
-                assert(executor.memory_manager->merge(
-                    section->device_address, section->next()->device_address));
+                bool res = executor.memory_manager->merge(
+                    section->device_address, section->next()->device_address);
+                assert(res);
                 executor.layout.recordMemoryMergeEvent(
                     section->device_address, section->next()->device_address);
               }
@@ -4424,8 +5382,9 @@ struct MemoryOperationExecutor final {
             if (section_prev != nullptr &&
                 tensor.isMergeable(section_prev->offset)) {
               if (section->status != status::MemoryStatusType::none) {
-                assert(executor.memory_manager->merge(
-                    section_prev->device_address, section->device_address));
+                bool res = executor.memory_manager->merge(
+                    section_prev->device_address, section->device_address);
+                assert(res);
                 executor.layout.recordMemoryMergeEvent(
                     section_prev->device_address, section->device_address);
               }
@@ -4433,12 +5392,11 @@ struct MemoryOperationExecutor final {
             }
             if (freed_size >= size)
               return;
-            break;
           }
           default:
             break;
         }
-        section = section->next();
+        section = section->prev();
       } while (section != nullptr);
     }
     virtual void fragment(status::TensorPres& tensor) override {
@@ -4493,41 +5451,91 @@ struct MemoryOperationExecutor final {
   //     tensor.setAllocated(device_address);
   // }
 
+  /**
+   * Copy in tensor data from host memory to device memory with specific size.
+   * Copy from the last section that located only on host.
+   * @param tensor Tensor to be copied in
+   * @param size   Size to be copied in
+   */
   void copyIn(status::TensorPres& tensor, size_t size) {
     impl->copyIn(tensor, size);
   }
 
+  /**
+   * Copy out tensor data from device memory to host memory with specific size.
+   * Copy from the first section that located only on device.
+   * @param tensor Tensor to be copied out
+   * @param size   Size to be copied out
+   */
   void copyOut(status::TensorPres& tensor, size_t size) {
     impl->copyOut(tensor, size);
   }
 
+  /**
+   * Free device memory with specific size.
+   * Free from the first section that located on device
+   * @param tensor Tensor to be freed on device
+   * @param size   Size to be freed on device
+   */
   void freeDevice(status::TensorPres& tensor, size_t size) {
     impl->freeDevice(tensor, size);
   }
 
+  /**
+   * Free host memory with specific size.
+   * Free from the last section that located on host
+   * @param tensor Tensor to be freed on host
+   * @param size   Size to be freed on host
+   */
   void freeHost(status::TensorPres& tensor, size_t size) {
     impl->freeHost(tensor, size);
   }
 
+  /**
+   * Swap in tensor data from host memory to device memory with specific size.
+   * Swap from the first section that located only on host.
+   * @param tensor Tensor to be copied in
+   * @param size   Size to be copied in
+   */
   void swapIn(status::TensorPres& tensor, size_t size) {
     copyIn(tensor, size);
     freeHost(tensor, size);
   }
 
+  /**
+   * Swap out tensor data from device memory to host memory with specific size.
+   * Swap from the first section that located only on device.
+   * @param tensor Tensor to be copied out
+   * @param size   Size to be copied out
+   */
   void swapOut(status::TensorPres& tensor, size_t size) {
     copyOut(tensor, size);
     freeDevice(tensor, size);
   }
 
+  /**
+   * Free device and host memory with specific size.
+   * Free from the first section that located on device or host
+   * @param tensor Tensor to be freed on device and host
+   * @param size   Size to be freed on device and host
+   */
   void free(status::TensorPres& tensor, size_t size) {
     freeDevice(tensor, size);
     freeHost(tensor, size);
   }
 
+  /**
+   * Place fragment for the tensor
+   * @param tensor Tensor to be placed fragment
+   */
   void fragment(status::TensorPres& tensor) {
     impl->fragment(tensor);
   }
 
+  /**
+   * Release and fuse the fragment for the tensor
+   * @param tensor Tensor to be fused
+   */
   void fuse(status::TensorPres& tensor) {
     impl->fuse(tensor);
   }
@@ -4548,7 +5556,71 @@ using Callbacks = std::unordered_map<CallbackStage, Callback>;
 
 } // namespace mori
 
+#include <functional>
+
 namespace mori {
+namespace utils {
+
+template <typename T>
+struct PresentationFunction final {
+  inline static void require(T& target) {
+    target.require();
+  }
+  inline static void release(T& target) {
+    target.release();
+  }
+}; // struct AutoReleaseFunction
+
+template <typename T>
+struct Presentation final {
+ public:
+  using PresentationFunctionType = std::function<void(T&)>;
+
+ private:
+  T& target;
+
+  PresentationFunctionType require_func;
+  PresentationFunctionType release_func;
+
+  std::atomic<bool> presented = false;
+
+ public:
+  Presentation(T& _target) : target(_target) {
+    require_func = PresentationFunction<T>::require;
+    release_func = PresentationFunction<T>::release;
+  }
+  Presentation(
+      T& _target,
+      const PresentationFunctionType& _require_func,
+      const PresentationFunctionType& _release_func)
+      : target(_target),
+        require_func(_require_func),
+        release_func(_release_func) {}
+  inline void require() {
+    if (presented)
+      throw inited_exception("Target already required.");
+    require_func(target);
+    presented = true;
+  }
+  inline void release() {
+    if (!presented)
+      throw inited_exception("Target not required.");
+    release_func(target);
+    presented = false;
+  }
+  ~Presentation() {
+    if (presented)
+      release();
+  }
+
+}; // struct Presentation
+
+} // namespace utils
+} // namespace mori
+
+namespace mori {
+
+struct BackendHandle;
 
 struct MemoryScheduleExecutor final {
  protected:
@@ -4570,9 +5642,6 @@ struct MemoryScheduleExecutor final {
   std::atomic<bool> events_updated = false;
   events::ScheduleEvents new_events;
 
-  std::shared_mutex current_operator_m;
-  std::string current_operator;
-
   // Executor thread
   std::thread executor_thread;
   std::recursive_mutex executor_mutex;
@@ -4580,8 +5649,16 @@ struct MemoryScheduleExecutor final {
   std::deque<events::ScheduleEvent> activated_events;
   std::mutex queue_m;
 
+  // Memory synchronization information
+  std::mutex exec_sync_mutex;
+  std::chrono::steady_clock::time_point exec_sync_time_offset;
+
   std::atomic<bool> half_iter_sync = false;
   std::atomic<bool> iter_sync = false;
+  std::atomic<bool> exec_sync = false;
+  std::atomic<bool> next_op_sync = false;
+
+  std::atomic<int> iteration = 0;
 
   // The schedule events are ordered.
   // The operator-triggered events are ordered by the execution sequence of
@@ -4589,7 +5666,6 @@ struct MemoryScheduleExecutor final {
   // timepoint.
   std::chrono::steady_clock::time_point current_time_offset;
   std::vector<events::ScheduleEvent>::iterator current_timepoint_event_posi;
-  std::vector<events::ScheduleEvent>::iterator current_execution_event_posi;
 
   MemoryOperationExecutor executor;
 
@@ -4597,19 +5673,22 @@ struct MemoryScheduleExecutor final {
 
   // Time-triggered events require these methods to reset the schedule timepoint
   // offset.
-  inline int getExecutionTimepoint() {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
+  inline long getExecutionTimepoint() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now() - current_time_offset)
         .count();
   }
   inline void resetExecution() {
-    // Reset execution of execution-triggered events.
-    current_execution_event_posi = current_eventset.load()->execution.begin();
+    std::unique_lock<std::mutex> queue_lock{queue_m};
+    activated_events.clear();
+    queue_lock.unlock();
+
     // Reset execution of timepoint-triggered events.
     current_time_offset = std::chrono::steady_clock::now();
+    exec_sync_time_offset = current_time_offset;
     current_timepoint_event_posi = current_eventset.load()->timepoint.begin();
 
-    activated_events.clear();
+    next_op_sync = false;
   }
 
   void activateEvents() {
@@ -4619,7 +5698,7 @@ struct MemoryScheduleExecutor final {
 
     // Activate timepoint triggered events.
     // Execution triggered events do not need to be activated here.
-    int current_exec_timepoint = getExecutionTimepoint();
+    long current_exec_timepoint = getExecutionTimepoint();
     auto current_end = std::find_if(
         current_timepoint_event_posi,
         eventset.end(),
@@ -4630,74 +5709,100 @@ struct MemoryScheduleExecutor final {
     // Retrieve the schedule events that should be triggered.
     std::unique_lock<std::mutex> queue_lock{queue_m};
     while (current_timepoint_event_posi < current_end) {
-      activated_events.push_back(*current_timepoint_event_posi);
+      if (current_timepoint_event_posi->instant)
+        executeEvent(*current_timepoint_event_posi);
+      else
+        activated_events.push_back(*current_timepoint_event_posi);
       ++current_timepoint_event_posi;
     }
   }
 
-  void executeEvents() {
-    std::unique_lock<std::mutex> queue_lock{queue_m};
-    while (!activated_events.empty()) {
-      // Retrieve tensor information.
-      events::ScheduleEvent event = activated_events.front();
-      activated_events.pop_front();
+  bool executeEvent(const events::ScheduleEvent& event) {
+    status::TensorView tensor_view =
+        status.tryReferenceTensor(event.tensor_name);
+    if (!tensor_view.isReferenced())
+      return false;
+    status::TensorPres tensor_pres = tensor_view.reference();
 
-      const std::string& operator_name = event.operator_name;
-      const std::string& tensor_name = event.tensor_name;
-      size_t size = event.size;
-
-      std::shared_lock<std::shared_mutex> col{current_operator_m};
-      if (current_operator == tensor_name)
-        continue;
-
-      status::TensorPres tensor = status.referenceTensor(tensor_name);
-      try {
-        switch (event.type) {
-          case events::ScheduleEventType::copyin:
-            executor.copyIn(tensor, size);
-            break;
-          case events::ScheduleEventType::copyout:
-            executor.copyOut(tensor, size);
-            break;
-          case events::ScheduleEventType::swapin:
-            executor.swapIn(tensor, size);
-            if (callbacks.count(CallbackStage::postSwapIn))
-              callbacks.at(CallbackStage::postSwapIn)(
-                  tensor_name, tensor.getSection(0).device_address);
-            (*logger) << LogLevel::debug << "Operator " << operator_name
-                      << ": tensor " << tensor_name
-                      << " swapped in. (Prefetch)";
-            logger->flush();
-            break;
-          case events::ScheduleEventType::swapout:
-            executor.swapOut(tensor, size);
-            if (callbacks.count(CallbackStage::postSwapOut))
-              callbacks.at(CallbackStage::postSwapOut)(
-                  tensor_name, tensor.getSection(0).host_address);
-            (*logger) << LogLevel::debug << "Operator " << operator_name
-                      << ": tensor " << tensor_name
-                      << " swapped out. (Instant)";
-            logger->flush();
-            break;
-          case events::ScheduleEventType::freehost:
-            executor.freeHost(tensor, size);
-            break;
-          case events::ScheduleEventType::freedev:
-            executor.freeDevice(tensor, size);
-            break;
-          case events::ScheduleEventType::free:
-            executor.free(tensor, size);
-            break;
-          default:
-            break;
-        }
-      } catch (std::exception& e) {
-        (*logger) << LogLevel::debug
-                  << "Exception in executing memory swapping events, reason: "
-                  << e.what();
-        logger->flush();
-      }
+    switch (event.type) {
+      case events::ScheduleEventType::copyin:
+        // No data to copy in.
+        if (tensor_pres.isDeviceAllLocated())
+          break;
+        if (!tensor_pres.isHostLocated())
+          break;
+        executor.copyIn(tensor_pres, event.size);
+        if (callbacks.count(CallbackStage::postSwapIn))
+          callbacks.at(CallbackStage::postSwapIn)(
+              event.tensor_name, tensor_pres.getSection(0).device_address);
+        (*logger) << LogLevel::debug << "Operator " << event.operator_name
+                  << ": tensor " << event.tensor_name
+                  << " copied in. (Prefetch)" << endl;
+        break;
+      case events::ScheduleEventType::copyout:
+        // No data to copy out.
+        if (!tensor_pres.isDeviceLocated())
+          break;
+        if (tensor_pres.isHostAllLocated())
+          break;
+        executor.copyOut(tensor_pres, event.size);
+        break;
+      case events::ScheduleEventType::swapin:
+        // No data to swap in.
+        if (tensor_pres.isDeviceAllLocated())
+          break;
+        if (!tensor_pres.isHostLocated())
+          break;
+        executor.swapIn(tensor_pres, event.size);
+        if (callbacks.count(CallbackStage::postSwapIn))
+          callbacks.at(CallbackStage::postSwapIn)(
+              event.tensor_name, tensor_pres.getSection(0).device_address);
+        (*logger) << LogLevel::debug << "Operator " << event.operator_name
+                  << ": tensor " << event.tensor_name
+                  << " swapped in. (Prefetch)" << endl;
+        break;
+      case events::ScheduleEventType::swapout:
+        // No data to swap out.
+        if (!tensor_pres.isDeviceLocated())
+          break;
+        if (tensor_pres.isHostAllLocated())
+          break;
+        executor.swapOut(tensor_pres, event.size);
+        if (callbacks.count(CallbackStage::postSwapOut))
+          callbacks.at(CallbackStage::postSwapOut)(
+              event.tensor_name, tensor_pres.getSection(0).host_address);
+        (*logger) << LogLevel::debug << "Operator " << event.operator_name
+                  << ": tensor " << event.tensor_name
+                  << " swapped out. (Instant)" << endl;
+        break;
+      case events::ScheduleEventType::freehost:
+        // No data to free on host.
+        if (!tensor_pres.isHostLocated())
+          break;
+        executor.freeHost(tensor_pres, event.size);
+        break;
+      case events::ScheduleEventType::freedev:
+        // No data to free on device.
+        if (!tensor_pres.isDeviceLocated())
+          break;
+        executor.freeDevice(tensor_pres, event.size);
+        if (callbacks.count(CallbackStage::postSwapOut))
+          callbacks.at(CallbackStage::postSwapOut)(
+              event.tensor_name, tensor_pres.getSection(0).host_address);
+        (*logger) << LogLevel::debug << "Operator " << event.operator_name
+                  << ": tensor " << event.tensor_name
+                  << " freed on device. (Instant)" << endl;
+        break;
+      case events::ScheduleEventType::free:
+        // No data to free on host and device.
+        if (!tensor_pres.isMemoryLocated())
+          break;
+        executor.free(tensor_pres, event.size);
+        break;
+      default:
+        break;
     }
+    return true;
   }
 
  public:
@@ -4751,46 +5856,83 @@ struct MemoryScheduleExecutor final {
     executor_thread = std::thread([this]() {
       while (inited) {
         // Examine if synchronization required.
-        if (half_iter_sync || iter_sync) {
-          // Inactivate all events, and prevent further events.
-          std::unique_lock<std::mutex> ql{queue_m};
-          activated_events.clear();
+        if (half_iter_sync) {
+          std::shared_lock<std::shared_mutex> em{events_m};
+          assert(current_eventset.load() == &this->forward_schedule_events);
+          current_eventset.store(&this->backward_schedule_events);
+          resetExecution();
+          half_iter_sync = false;
+        }
+        if (iter_sync) {
+          if (events_updated) {
+            std::unique_lock<std::shared_mutex> em_n{events_m};
+            std::unique_lock<std::mutex> nem{new_events_m};
 
-          if (half_iter_sync) {
-            std::shared_lock<std::shared_mutex> em{events_m};
-            assert(current_eventset.load() == &this->forward_schedule_events);
-            current_eventset.store(&this->backward_schedule_events);
-            resetExecution();
-            half_iter_sync = false;
+            this->forward_schedule_events =
+                std::move(this->new_events.forward_schedule_events);
+            this->backward_schedule_events =
+                std::move(this->new_events.backward_schedule_events);
+            logger->submit(
+                LogLevel::debug,
+                "Memory schedule executor switches to new schedule event set.");
+            events_updated = false;
           }
-          if (iter_sync) {
-            if (events_updated) {
-              std::unique_lock<std::shared_mutex> em_n{events_m};
-              std::unique_lock<std::mutex> nem{new_events_m};
 
-              this->forward_schedule_events =
-                  std::move(this->new_events.forward_schedule_events);
-              this->backward_schedule_events =
-                  std::move(this->new_events.backward_schedule_events);
-              logger->submit(
-                  LogLevel::debug,
-                  "Memory schedule executor switches to new schedule event set.");
-              events_updated = false;
-            }
-
-            std::shared_lock<std::shared_mutex> em{events_m};
-            current_eventset.store(&this->forward_schedule_events);
-            resetExecution();
-
-            iter_sync = false;
-          }
+          std::shared_lock<std::shared_mutex> em{events_m};
+          current_eventset.store(&this->forward_schedule_events);
+          resetExecution();
+          iter_sync = false;
         }
 
+        if (exec_sync)
+          continue;
+        std::unique_lock<std::mutex> l{exec_sync_mutex, std::try_to_lock};
+        if (!l.owns_lock())
+          continue;
         // Execution of schedule events
         // Activate events should be triggered.
         activateEvents();
-        // Executed activated events.
-        executeEvents();
+        // Execute activated events.
+        std::unique_lock<std::mutex> queue_lock{queue_m};
+        size_t target_executed_events = activated_events.size();
+        size_t current_executed_events = 0;
+        queue_lock.unlock();
+
+        while (current_executed_events < target_executed_events) {
+          if (half_iter_sync || iter_sync || exec_sync)
+            break;
+          if (next_op_sync)
+            continue;
+
+          queue_lock.lock();
+          // Retrieve tensor information.
+          if (activated_events.empty())
+            return;
+          const events::ScheduleEvent& event = activated_events.front();
+          queue_lock.unlock();
+
+          try {
+            if (executeEvent(event)) {
+              // Success execution of event.
+              queue_lock.lock();
+              activated_events.pop_front();
+              queue_lock.unlock();
+              ++current_executed_events;
+            }
+          } catch (memory_insufficience& e) {
+            (*logger)
+                << LogLevel::debug
+                << "Exception in executing memory swapping events, reason: "
+                << e.what() << ", " << e.demand() << " unmet." << endl;
+            next_op_sync = true;
+          } catch (std::exception& e) {
+            (*logger)
+                << LogLevel::debug
+                << "Exception in executing memory swapping events, reason: "
+                << e.what() << endl;
+          }
+        }
+        // Currently no more schedule events.
       }
     });
     // Examine if the thread starts properly
@@ -4811,28 +5953,27 @@ struct MemoryScheduleExecutor final {
     events_updated = true;
   }
 
-  void setOperatorStarted(const std::string& op) {
-    std::unique_lock<std::shared_mutex> col{current_operator_m};
-    current_operator = op;
-  }
+  void setOperatorStarted(const std::string& op) {}
 
   void setOperatorFinished(const std::string& op) {
+    next_op_sync = false;
     std::unique_lock<std::mutex> ql{queue_m};
-    while (current_execution_event_posi !=
-           current_eventset.load()->execution.end()) {
-      if (current_execution_event_posi->postop == op) {
-        activated_events.push_back(*current_execution_event_posi++);
-      } else
-        break;
+    for (auto& x : current_eventset.load()->execution[op]) {
+      if (x.instant)
+        executeEvent(x);
+      else
+        activated_events.push_back(x);
     }
     // logger->submit(LogLevel::debug, "Memory schedule executor moves to next
     // operator.");
   }
 
   int getIteration() {
-    return 0;
+    return iteration;
   }
-  void setIteration(int _iteration) {}
+  void setIteration(int _iteration) {
+    iteration = _iteration;
+  }
 
   void newIteration() {
     if (!inited)
@@ -4842,6 +5983,7 @@ struct MemoryScheduleExecutor final {
       ;
     logger->submit(
         LogLevel::debug, "Memory schedule executor moves to next iteration.");
+    ++iteration;
   }
 
   /**
@@ -4869,6 +6011,39 @@ struct MemoryScheduleExecutor final {
       executor_thread.join();
   }
 
+  /**
+   * @brief Synchronize with memory schedule executor. Prevent further
+   * activation and exectuion of memory schedule events.
+   * @note  Leverage with mori::utils::Presentation suggested.
+   */
+  void synchronize() {
+    exec_sync = true;
+    exec_sync_mutex.lock();
+    // Memory insufficient, block the forward schedule events and perform
+    // passive memory swapping. Since the memory swapping is performed on the
+    // specific copying stream, this synchroization does not lead to further
+    // overhead.
+    exec_sync_time_offset = std::chrono::steady_clock::now();
+  }
+  /**
+   * @brief Release memory scheduler executor. Proceed further activation and
+   * execution of memory schedule events.
+   * @note  Leverage with mori::utils::Presentation suggested.
+   */
+  void release() {
+    if (exec_sync_mutex.try_lock()) {
+      // Indicating synchronization not locked.
+      exec_sync_mutex.unlock();
+      throw uninited_exception(
+          "Memory Schedule executor not in synchronization.");
+    }
+    std::chrono::steady_clock::duration synchronization_time_duration =
+        std::chrono::steady_clock::now() - exec_sync_time_offset;
+    current_time_offset += synchronization_time_duration;
+    exec_sync_mutex.unlock();
+    exec_sync = false;
+  }
+
   ~MemoryScheduleExecutor() {
     if (inited)
       terminate();
@@ -4878,11 +6053,195 @@ struct MemoryScheduleExecutor final {
 
 }; // struct MemoryScheduleExecutor
 
+namespace utils {
+
+template <>
+struct PresentationFunction<MemoryScheduleExecutor> {
+  inline static void require(MemoryScheduleExecutor& target) {
+    target.synchronize();
+  }
+  inline static void release(MemoryScheduleExecutor& target) {
+    target.release();
+  }
+}; // struct PresentationFunction<MemoryScheduleExecutor>
+
+} // namespace utils
 } // namespace mori
 
 namespace mori {
+namespace layout {
 
-// struct Frontend;
+struct MemoryDefragmentationExecutor {
+ private:
+  status::MemoryStatus& status;
+  layout::MemoryLayout& layout;
+  MemoryManager* memory_manager;
+
+  std::map<size_t, std::set<void*>> allocated_regions;
+  std::map<size_t, std::set<void*>> idle_regions;
+
+  std::shared_mutex m;
+
+ protected:
+  void performCopyDevice(void* src, void* dst, size_t size) {
+    assert(src >= dst);
+
+    MemoryRegion region = layout.getMemoryRegion(src);
+
+    status::TensorView tensor_view = status.tryReferenceTensor(region.name);
+    if (!tensor_view.isReferenced())
+      return; // Cannot move this tensor
+    status::TensorPres tensor_pres = tensor_view.reference();
+
+    const status::MemorySection* section = &(tensor_pres.getFirstSection());
+    while (section != nullptr) {
+      if (section->device_address == src)
+        break;
+      section = section->next();
+    }
+    if (section == nullptr)
+      throw memory_unmanaged();
+
+    if (utils::address_offset(dst, size) >= src) {
+      // No interleaving of the two memory regions.
+      memory_manager->salloc(dst, size);
+      memory_manager->copyDevice(src, dst, size);
+      memory_manager->freeDevice(src);
+
+      layout.recordMemoryAllocateEvent(dst, size, tensor_pres.getName());
+      layout.recordMemoryFreeEvent(src);
+
+      allocated_regions[size].insert(dst);
+      allocated_regions[size].erase(src);
+      idle_regions[size].insert(src);
+      idle_regions[size].erase(dst);
+
+    } else {
+      // Interleaving of memory regions.
+      memory_manager->salloc(dst, utils::address_distance(src, dst));
+      bool res = memory_manager->merge(dst, src);
+      assert(res);
+      memory_manager->copyDevice(src, dst, size);
+      void* right = memory_manager->split(dst, size);
+      memory_manager->freeDevice(right);
+
+      layout.recordMemoryAllocateEvent(
+          dst, utils::address_distance(src, dst), tensor_pres.getName());
+      layout.recordMemoryMergeEvent(dst, src);
+      layout.recordMemorySplitEvent(dst, size);
+      layout.recordMemoryFreeEvent(right);
+
+      allocated_regions[size].insert(dst);
+      allocated_regions[size].erase(src);
+      idle_regions[utils::address_distance(src, dst)].insert(src);
+      idle_regions[utils::address_distance(src, dst)].erase(dst);
+    }
+
+    tensor_pres.setMoved(section->offset, dst);
+  }
+
+ public:
+  MemoryDefragmentationExecutor(
+      status::MemoryStatus& _status,
+      layout::MemoryLayout& _layout)
+      : status(_status), layout(_layout) {}
+
+  inline void setMemoryManager(MemoryManager* _memory_manager) {
+    memory_manager = _memory_manager;
+
+    assert(allocated_regions.empty());
+    assert(idle_regions.empty());
+
+    MemoryInfo&& info = memory_manager->getMemoryInfo();
+    idle_regions[info.device.transient_block.size].insert(
+        info.device.transient_block.address);
+  }
+
+  inline void recordMemoryAllocateEvent(void* address) {
+    if (!layout.isTransient(address))
+      throw memory_unmanaged();
+    MemoryRegion region = layout.getMemoryRegion(address);
+
+    std::unique_lock<std::shared_mutex> l{m};
+
+    assert(allocated_regions[region.size].count(address) == 0);
+    assert(idle_regions[region.size].count(address) == 1);
+
+    allocated_regions[region.size].insert(address);
+    idle_regions[region.size].erase(address);
+  }
+
+  inline void recordMemoryFreeEvent(void* address) {
+    if (!layout.isTransient(address))
+      throw memory_unmanaged();
+    MemoryRegion region = layout.getMemoryRegion(address);
+
+    std::unique_lock<std::shared_mutex> l{m};
+
+    assert(allocated_regions[region.size].count(address) == 1);
+    assert(idle_regions[region.size].count(address) == 0);
+
+    allocated_regions[region.size].erase(address);
+    idle_regions[region.size].insert(address);
+  }
+
+  std::pair<size_t, size_t> getTransientBlockAllocatableSize(
+      size_t granularity) const noexcept {
+    std::pair<size_t, size_t> re;
+    re.first = 0;
+    re.second = 0;
+    for (auto& x : idle_regions) {
+      if (x.first >= granularity)
+        re.first += x.first * x.second.size();
+      else
+        re.second += x.first * x.second.size();
+    }
+    return re;
+  }
+
+  void performDefragmentation(size_t granularity) {
+    auto bp = std::find_if(
+        layout.blocks.begin(),
+        layout.blocks.end(),
+        [](const std::pair<void*, Block>& p) {
+          return p.second.type == MemoryBlockType::transient;
+        });
+    assert(bp != layout.blocks.end());
+
+    std::unique_lock<std::shared_mutex> l{bp->second.m};
+    auto& regions = bp->second.regions;
+
+    for (auto p = regions.begin(); p != regions.end(); ++p) {
+      if (p->second.allocated)
+        continue;
+      if (p->second.size >= granularity)
+        continue;
+      // Find fragmentation
+      if (!allocated_regions[p->second.size].empty()) {
+        auto q = allocated_regions[p->second.size].rbegin();
+        if (*q != p->first) {
+          // Fast path
+          assert(*q >= p->first);
+          performCopyDevice(*q, p->first, p->second.size);
+          continue;
+        }
+      }
+      // Slow path
+      auto q = p;
+      ++q;
+      if (q == regions.end())
+        break;
+      assert(q->second.allocated);
+      performCopyDevice(q->first, p->first, q->second.size);
+    }
+  }
+
+}; // struct MemoryDefragmentationExecutor
+
+} // namespace layout
+} // namespace mori
+
+namespace mori {
 
 /**
  * MemorySession
@@ -4892,6 +6251,9 @@ namespace mori {
 struct MemorySession final {
  private:
   friend struct Frontend;
+
+ public:
+  using MemoryFunction = std::function<bool()>;
 
  public:
   struct Request final {
@@ -4908,6 +6270,7 @@ struct MemorySession final {
 
     std::unordered_map<std::string, status::TensorPres> requested_tensors;
     std::atomic<bool> waiting = true;
+    std::atomic<bool> executing = false;
 
     /**
      * isTensorWaited
@@ -4923,9 +6286,7 @@ struct MemorySession final {
         MemorySession& _session,
         const std::string& _op,
         ApplicationStage _stage)
-        : session(_session), op(_op), stage(_stage) {
-      session.sch_executor.setOperatorStarted(_op);
-    }
+        : session(_session), op(_op), stage(_stage) {}
 
    public:
     Request(const Request&) = delete;
@@ -4935,6 +6296,11 @@ struct MemorySession final {
     }
 
     void waitTensor(const std::string& tensor) {
+      if (!waiting)
+        throw uninited_exception();
+      if (executing)
+        throw inited_exception();
+
       // If the tensor waited, it would have been locked on device memory.
       if (isTensorWaited(tensor))
         return;
@@ -4948,23 +6314,30 @@ struct MemorySession final {
 
       size_t acquiring_size = pres.getSize() - pres.getDeviceSize();
       try {
-        session.op_executor.swapIn(pres, pres.getSize() - pres.getDeviceSize());
+        session.op_executor.copyIn(pres, pres.getSize() - pres.getDeviceSize());
       } catch (memory_device_insufficience& e) {
         // Memory on device not insufficience.
-        session.waitMemory(e.demand());
-        session.op_executor.swapIn(pres, pres.getSize() - pres.getDeviceSize());
+        size_t released_size =
+            session.waitMemory(pres.getSize(), [this, &pres]() {
+              try {
+                session.op_executor.copyIn(
+                    pres, pres.getSize() - pres.getDeviceSize());
+              } catch (memory_device_insufficience& e) {
+                return false;
+              }
+              return true;
+            });
+        if (!pres.isDeviceAllLocated())
+          throw e;
       }
-
-      // Assert the tensor already on device.
-      assert(pres.getDeviceSize() == pres.getSize());
+      assert(pres.isDeviceAllLocated());
 
       if (session.callbacks.count(CallbackStage::postSwapIn))
         session.callbacks.at(CallbackStage::postSwapIn)(
             tensor, pres.getSection(0).device_address);
       (*session.logger) << LogLevel::debug << "Operator: " << op
                         << ", tensor: " << tensor
-                        << " swapped in. (Memory access)";
-      session.logger->flush();
+                        << " swapped in. (Memory access)" << endl;
       session.backend_handle.lock()->submitEvent(events::MemoryEvent(
           op, tensor, acquiring_size, events::MemoryEventType::swapin, stage));
     }
@@ -4979,6 +6352,19 @@ struct MemorySession final {
     //         waitTensor(x.first, x.second);
     // }
 
+    void setOperationStarted() {
+      if (!waiting)
+        throw uninited_exception();
+      if (executing)
+        throw inited_exception();
+
+      session.sch_executor.setOperatorStarted(op);
+      session.backend_handle.lock()->submitEvent(events::ExecutionEvent(
+          op, events::ExecutionEventType::request, stage));
+
+      executing = true;
+    }
+
     /**
      * setMemoryDataAssigned
      * Set the memory data is assigned, or written.
@@ -4990,12 +6376,17 @@ struct MemorySession final {
     void setMemoryDataAssigned(const std::string& tensor) {
       if (!waiting)
         throw uninited_exception();
+      if (executing)
+        throw inited_exception();
       if (!isTensorWaited(tensor))
         throw status_exception("Tensor not waited.");
 
       // Do not acquire locks here since the tensor is awaited.
       // Tensor exists since isTensorWaited(tensor) is true.
       status::TensorPres& pres = requested_tensors.at(tensor);
+      if (pres.isHostLocated())
+        session.op_executor.freeHost(pres, pres.getHostSize());
+      assert(!pres.isHostLocated());
       pres.setAssigned();
 
       // emit memory event
@@ -5014,6 +6405,8 @@ struct MemorySession final {
     void setMemoryDataAcquired(const std::string& tensor) {
       if (!waiting)
         throw uninited_exception();
+      if (executing)
+        throw inited_exception();
       if (!isTensorWaited(tensor))
         throw status_exception("Operator or tensor not waited.");
 
@@ -5035,10 +6428,15 @@ struct MemorySession final {
     void setMemoryDataAccessed(const std::string& tensor) {
       if (!waiting)
         throw uninited_exception();
+      if (executing)
+        throw inited_exception();
       if (!isTensorWaited(tensor))
         throw status_exception("Tensor not waited.");
 
       status::TensorPres& pres = requested_tensors.at(tensor);
+      if (pres.isHostLocated())
+        session.op_executor.freeHost(pres, pres.getHostSize());
+      assert(!pres.isHostLocated());
       pres.setAccessed();
 
       // emit memory event
@@ -5046,11 +6444,27 @@ struct MemorySession final {
           op, tensor, pres.getSize(), events::MemoryEventType::access, stage));
     }
 
+    void setOperationFinished() {
+      if (!waiting)
+        throw uninited_exception();
+      if (!executing)
+        throw uninited_exception();
+      session.sch_executor.setOperatorFinished(op);
+      session.backend_handle.lock()->submitEvent(events::ExecutionEvent(
+          op, events::ExecutionEventType::release, stage));
+
+      executing = false;
+    }
+
     void release() {
+      if (executing)
+        setOperationFinished();
+      if (!waiting)
+        return;
+
       for (auto& x : requested_tensors)
         x.second.release();
 
-      session.sch_executor.setOperatorFinished(op);
       waiting = false;
     }
 
@@ -5072,6 +6486,10 @@ struct MemorySession final {
   MemoryScheduleExecutor& sch_executor;
   MemoryOperationExecutor op_executor;
 
+  MemoryInfo memory_info;
+
+  layout::MemoryDefragmentationExecutor defrag_executor;
+
   Callbacks callbacks;
 
   Logger* logger;
@@ -5083,6 +6501,9 @@ struct MemorySession final {
   }
   void setMemoryManager(MemoryManager* _memory_manager) {
     op_executor.setMemoryManager(_memory_manager);
+    defrag_executor.setMemoryManager(_memory_manager);
+
+    memory_info = _memory_manager->getMemoryInfo();
   }
   void setLogger(Logger* _logger) {
     logger = _logger;
@@ -5091,6 +6512,118 @@ struct MemorySession final {
       CallbackStage stage,
       const std::function<int(const std::string&, void*)>& callback) {
     callbacks.emplace(stage, callback);
+  }
+
+  size_t waitTensorMemory(size_t size, const std::string& initial_tensor) {
+    std::string tensor_name = initial_tensor;
+    while (true) {
+      // Since the memory schedule executor is synchronized, a tensor that
+      // cannot be referenced must be waited by memory session.
+      status::TensorView tensor_view = status.tryReferenceTensor(tensor_name);
+      if (!tensor_view.isReferenced())
+        return 0;
+      status::TensorPres tensor_pres = tensor_view.reference();
+      // Do not swap out tensors that already host-only.
+      if (!tensor_pres.isDeviceLocated())
+        return 0;
+      uint8_t* device_address_e =
+          (uint8_t*)(tensor_pres.getLastSection().device_address);
+      // // Do not swap out persistent or transient tensors.
+      if (!layout.isCommon(device_address_e))
+        return 0;
+
+      // Prepare to swap out this tensor.
+      // Step 1: Locate the first section on device.
+      const status::MemorySection* section = &(tensor_pres.getFirstSection());
+      while (section != nullptr) {
+        if (section->status == status::MemoryStatusType::empty ||
+            section->status == status::MemoryStatusType::device ||
+            section->status == status::MemoryStatusType::coexist)
+          break;
+        section = section->next();
+      }
+      // Since data located on device, a section will be selected finally.
+      assert(section != nullptr);
+
+      // Step 2: Locate prev memory region.
+      size_t avail_size = 0;
+      if (layout.isRegionExist(section->device_address, Direction::prev)) {
+        layout::MemoryRegion memory_region_prev =
+            layout.getMemoryRegion(section->device_address, Direction::prev);
+        if (!memory_region_prev.allocated)
+          avail_size = memory_region_prev.size;
+      } else
+        avail_size = 0;
+      if (avail_size >= size)
+        return avail_size;
+
+      // Step 3: Calculate swapping amount
+      device_address_e += tensor_pres.getLastSection().size;
+      if (tensor_pres.getFragment().status == status::MemoryStatusType::empty)
+        device_address_e += tensor_pres.getFragment().size;
+      size_t releasing_b = tensor_pres.getDeviceSize();
+      if (tensor_pres.getFragment().status == status::MemoryStatusType::empty)
+        releasing_b += tensor_pres.getFragment().size;
+      size_t releasing_size = releasing_b;
+      if (releasing_size + avail_size > size)
+        releasing_size = size - avail_size;
+      // If partically swap tensor, reserve aligned size
+      assert(
+          utils::get_memory_aligned_size(
+              releasing_size, memory_info.device.align_size) >= releasing_size);
+      size_t releasing_alignment_size =
+          utils::get_memory_aligned_size(
+              releasing_size, memory_info.device.align_size) -
+          releasing_size;
+      if (releasing_size + releasing_alignment_size <=
+          tensor_pres.getDeviceSize())
+        releasing_size += releasing_alignment_size;
+      else
+        releasing_alignment_size = 0;
+      op_executor.swapOut(tensor_pres, releasing_size);
+      size_t releasing_e = tensor_pres.getDeviceSize();
+      if (tensor_pres.getFragment().status == status::MemoryStatusType::empty)
+        releasing_e += tensor_pres.getFragment().size;
+
+      std::string op_name = tensor_pres.getOperatorName();
+      if (callbacks.count(CallbackStage::postSwapOut))
+        callbacks.at(CallbackStage::postSwapOut)(
+            tensor_name, tensor_pres.getSection(0).host_address);
+      (*logger) << LogLevel::debug << "Operator " << op_name << ": tensor "
+                << tensor_name << " swapped out. (Memory insufficience)"
+                << endl;
+
+      backend_handle.lock()->submitEvent(events::MemoryEvent(
+          op_name,
+          tensor_name,
+          releasing_b - releasing_e,
+          events::MemoryEventType::swapout,
+          stage));
+
+      assert(releasing_b >= (releasing_e + releasing_alignment_size));
+      avail_size =
+          avail_size + releasing_b - releasing_e - releasing_alignment_size;
+      if (avail_size >= size)
+        return avail_size;
+
+      assert(releasing_e == 0);
+
+      if (!layout.isRegionExist(device_address_e))
+        return avail_size;
+      layout::MemoryRegion region = layout.getMemoryRegion(device_address_e);
+      if (!region.allocated) {
+        avail_size += region.size;
+        if (avail_size >= size)
+          return avail_size;
+        // Memory demand unmet.
+        device_address_e += region.size;
+        if (!layout.isRegionExist(device_address_e))
+          return avail_size;
+        region = layout.getMemoryRegion(device_address_e);
+      }
+      tensor_name = region.name;
+    }
+    return 0;
   }
 
  public:
@@ -5103,7 +6636,8 @@ struct MemorySession final {
         status(_status),
         layout(_layout),
         sch_executor(_executor),
-        op_executor(_layout) {}
+        op_executor(_layout),
+        defrag_executor(_status, _layout) {}
 
   int getIteration() const {
     return 0;
@@ -5125,6 +6659,9 @@ struct MemorySession final {
 
     sch_executor.newIteration();
     backend_handle.lock()->newIteration();
+
+    (*logger) << LogLevel::info << "Iteration: " << sch_executor.getIteration()
+              << endl;
   }
 
   /**
@@ -5140,7 +6677,13 @@ struct MemorySession final {
       stage = ApplicationStage::forward;
 
     sch_executor.halfIteration();
+    (*logger) << LogLevel::debug
+              << "Half iteration: " << sch_executor.getIteration() << endl;
     // backend_handle.lock()->
+  }
+
+  inline ApplicationStage getStage() {
+    return stage;
   }
 
   /**
@@ -5183,6 +6726,8 @@ struct MemorySession final {
       op_executor.fragment(pres);
 
     layout.recordMemoryAllocateEvent(address, pres.getSize(), tensor);
+    // if (layout.isTransient(address))
+    // defrag_executor.recordMemoryAllocateEvent(address);
 
     // emit memory event
     backend_handle.lock()->submitEvent(events::MemoryEvent(
@@ -5209,112 +6754,51 @@ struct MemorySession final {
    * @brief Wait for available memory. Memory insufficent is an emergency event,
    * hence an independent method is provided.
    * @param size Memory size that should be released.
+   * @return Memory size released.
    * @note Currently this method adopts a FIFO strategy that the firstly
    * forward-propagating operator will be firstly released.
    */
-  void waitMemory(size_t size) {
-    size_t released_size = 0;
+  size_t waitMemory(
+      size_t size,
+      const MemoryFunction& func = []() { return false; }) {
+    utils::Presentation<MemoryScheduleExecutor> presentation(sch_executor);
+    presentation.require();
+    if (func())
+      return size;
 
+    size_t avail_size = 0;
     for (auto& op_name : status.getExecutionOrder()) {
       status::OperatorView op_view = status.tryReferenceOperator(op_name);
       if (!op_view.isReferenced())
         continue;
       status::OperatorPres op_pres = op_view.reference();
       // Forward propagation and backward propagation share the same set of
-      // operators.
-      if (op_pres.isBackwardPropagation())
-        continue;
+      // tensors. if (op_pres.isBackwardPropagation()) continue;
 
       for (auto& s : op_pres.getTensors()) {
         // Try to release memory from tensors.
-        std::string tensor_name = s;
-        while (true) {
-          status::TensorView tensor_view =
-              status.tryReferenceTensor(tensor_name);
-          if (!tensor_view.isReferenced())
-            break;
-          status::TensorPres tensor_pres = tensor_view.reference();
-          // // Do not swap out persistant or transient tensors.
-          // if (tensor_pres.isPersistant() || tensor_pres.isTransient()) break;
-          // Do not swap out tensors that already host-only.
-          if (!tensor_pres.isDeviceLocated())
-            break;
-
-          // Prepare to swap out this tensor.
-          uint8_t* device_address_e =
-              (uint8_t*)(tensor_pres.getLastSection().device_address) +
-              tensor_pres.getLastSection().size;
-          if (tensor_pres.getFragment().status ==
-              status::MemoryStatusType::empty)
-            device_address_e += tensor_pres.getFragment().size;
-          int releasing_b = tensor_pres.getDeviceSize();
-          if (tensor_pres.getFragment().status ==
-              status::MemoryStatusType::empty)
-            releasing_b += tensor_pres.getFragment().size;
-          int releasing_size = releasing_b;
-          if (releasing_size + released_size > size)
-            releasing_size = size - released_size;
-          op_executor.swapOut(tensor_pres, releasing_size);
-          int releasing_e = tensor_pres.getDeviceSize();
-          if (tensor_pres.getFragment().status ==
-              status::MemoryStatusType::empty)
-            releasing_e += tensor_pres.getFragment().size;
-
-          std::string op_name = tensor_pres.getOperatorName();
-          if (callbacks.count(CallbackStage::postSwapOut))
-            callbacks.at(CallbackStage::postSwapOut)(
-                tensor_name, tensor_pres.getSection(0).host_address);
-          (*logger) << LogLevel::debug << "Operator " << op_name << ": tensor "
-                    << tensor_name << " swapped out. (Memory insufficience)";
-          logger->flush();
-
-          backend_handle.lock()->submitEvent(events::MemoryEvent(
-              op_name,
-              tensor_name,
-              releasing_b - releasing_e,
-              events::MemoryEventType::swapout,
-              stage));
-
-          released_size += releasing_b - releasing_e;
-          if (released_size >= size)
-            break;
-
-          assert(releasing_e == 0);
-
-          if (!layout.isSectionExist(device_address_e))
-            break;
-          layout::MemorySection section =
-              layout.getMemorySection(device_address_e);
-          if (section.name == "") {
-            released_size += section.size;
-            if (released_size >= size)
-              break;
-            // Memory demand unmet.
-            device_address_e += section.size;
-            if (!layout.isSectionExist(device_address_e))
-              break;
-            section = layout.getMemorySection(device_address_e);
-          }
-          tensor_name = section.name;
-        }
-        if (released_size >= size)
+        avail_size = waitTensorMemory(size, s);
+        if (avail_size >= size)
           break;
-        // Releasing failed. Try next tensor.
-        released_size = 0;
       }
-      if (released_size >= size)
+      if (avail_size >= size)
         break;
     }
 
-    if (released_size >= size) {
-      // (*logger) << LogLevel::info << "Memory insufficient, mori releases " <<
-      // released_size << " of memory."; logger->flush();
-    } else {
-      // Mori wait memory failed.
+    // Memory demand unmet, try defragmentation.
+    // auto pair = defrag_executor.getTransientBlockAllocatableSize(size);
+    // if (pair.second >= size) defrag_executor.performDefragmentation(size);
+
+    if (avail_size >= size)
+      (*logger) << LogLevel::info << "Memory insufficient, mori releases "
+                << avail_size << " of memory." << endl;
+    else
       (*logger) << LogLevel::info << "Mori memory releasing failed, "
-                << " unmet.";
-      logger->flush();
-    }
+                << size - avail_size << " unmet." << endl;
+
+    func();
+    presentation.release();
+    return avail_size;
   }
 
   /**
@@ -5335,6 +6819,8 @@ struct MemorySession final {
         case status::MemoryStatusType::device: {
           void* device_address = section->device_address;
           pres.setDeviceFreed(section->offset);
+          // if (layout.isTransient(device_address))
+          // defrag_executor.recordMemoryFreeEvent(device_address);
           layout.recordMemoryFreeEvent(device_address);
         }
         case status::MemoryStatusType::none:
@@ -5398,10 +6884,7 @@ struct Frontend {
 
     virtual void setEntry(const std::string& _op) = 0;
 
-    virtual void setCallback(
-        CallbackStage stage,
-        const std::function<int(const std::string& tensor, void* ptr)>&
-            callback) = 0;
+    virtual void setCallback(CallbackStage stage, const Callback& callback) = 0;
 
     virtual void start() = 0;
     virtual bool isStarted() const noexcept = 0;
@@ -5462,45 +6945,38 @@ struct Frontend {
     virtual void registerTensor(const status::Tensor& tensor) override {
       (*frontend.logger) << LogLevel::error << "Registering tensor "
                          << tensor.getName()
-                         << " while frontend not initialized.";
-      frontend.logger->flush();
+                         << " while frontend not initialized." << endl;
       throw uninited_exception();
     }
     virtual void registerOperator(
         const status::Operator& operator_status) override {
       (*frontend.logger) << LogLevel::error << "Registering operator "
                          << operator_status.getName()
-                         << " while frontend not initialized.";
-      frontend.logger->flush();
+                         << " while frontend not initialized." << endl;
       throw uninited_exception();
     }
     // virtual void updateOperator(const std::string& op, const status::Tensor&
     // tensor_status) override {
     //     (*logger)<<LogLevel::error<<"Updating operator "<<op<<" while
-    //     frontend not initialized."; logger->flush(); throw
-    //     uninited_exception();
+    //     frontend not initialized." << endl; throw uninited_exception();
     // }
     virtual void setEntry(const std::string& _op) override {
       (*frontend.logger) << LogLevel::error << "Setting entry operator " << _op
-                         << " while frontend not initialized.";
-      frontend.logger->flush();
+                         << " while frontend not initialized." << endl;
       throw uninited_exception();
     }
 
-    virtual void setCallback(
-        CallbackStage stage,
-        const std::function<int(const std::string& tensor, void* ptr)>&
-            callback) override {
+    virtual void setCallback(CallbackStage stage, const Callback& callback)
+        override {
       (*frontend.logger) << LogLevel::error
-                         << "Setting callbacks while frontend not initialized.";
-      frontend.logger->flush();
+                         << "Setting callbacks while frontend not initialized."
+                         << endl;
       throw uninited_exception();
     }
 
     virtual void start() override {
       (*frontend.logger) << LogLevel::error
-                         << "Starting uninitialized frontend.";
-      frontend.logger->flush();
+                         << "Starting uninitialized frontend." << endl;
       throw uninited_exception();
     }
     virtual bool isStarted() const noexcept override {
@@ -5510,42 +6986,37 @@ struct Frontend {
     virtual MemorySession& getSession() override {
       (*frontend.logger)
           << LogLevel::error
-          << "Referencing to session from uninitialized frontend.";
-      frontend.logger->flush();
+          << "Referencing to session from uninitialized frontend." << endl;
       throw uninited_exception();
     }
 
     virtual void updateSchedule() override {
       (*frontend.logger) << LogLevel::error
-                         << "Updating schedule while frontend not initialized.";
-      frontend.logger->flush();
+                         << "Updating schedule while frontend not initialized."
+                         << endl;
       throw uninited_exception();
     }
 
     virtual void unregisterTensor(const std::string& tensor) override {
       (*frontend.logger) << LogLevel::error << "Unregistering tensor " << tensor
-                         << " while frontend not initialized.";
-      frontend.logger->flush();
+                         << " while frontend not initialized." << endl;
       throw uninited_exception();
     }
     virtual void unregisterOperator(const std::string& op) override {
       (*frontend.logger) << LogLevel::error << "Unregistering operator " << op
-                         << " while frontend not initialized.";
-      frontend.logger->flush();
+                         << " while frontend not initialized." << endl;
       throw uninited_exception();
     }
 
     virtual void stop() override {
       (*frontend.logger) << LogLevel::error
-                         << "Stopping uninitialized frontend.";
-      frontend.logger->flush();
+                         << "Stopping uninitialized frontend." << endl;
       throw uninited_exception();
     }
 
     virtual void terminate() override {
       (*frontend.logger) << LogLevel::error
-                         << "Terminating uninitialized frontend.";
-      frontend.logger->flush();
+                         << "Terminating uninitialized frontend." << endl;
       throw uninited_exception();
     }
   }; // struct UninitedImpl
@@ -5555,22 +7026,21 @@ struct Frontend {
 
     virtual void setMemoryManager(MemoryManager* _mem_manager) override {
       (*frontend.logger) << LogLevel::error
-                         << "Setting memory manager for initialized frontend.";
-      frontend.logger->flush();
+                         << "Setting memory manager for initialized frontend."
+                         << endl;
       throw inited_exception();
     }
 
     virtual void setLogger(Logger* _logger) override {
       (*frontend.logger) << LogLevel::error
-                         << "Setting logger for initialized frontend.";
-      frontend.logger->flush();
+                         << "Setting logger for initialized frontend." << endl;
       throw inited_exception();
     }
 
     virtual void init() override {
       (*frontend.logger) << LogLevel::error
-                         << "Initializing frontend that already inited.";
-      frontend.logger->flush();
+                         << "Initializing frontend that already inited."
+                         << endl;
       throw inited_exception();
     }
     virtual bool isInited() const noexcept override {
@@ -5580,16 +7050,14 @@ struct Frontend {
     virtual void registerTensor(const status::Tensor& tensor) override {
       frontend.memory_status.registerTensor(tensor);
       (*frontend.logger) << LogLevel::debug << "Tensor " << tensor.getName()
-                         << " registered.";
-      frontend.logger->flush();
+                         << " registered." << endl;
     }
 
     virtual void registerOperator(
         const status::Operator& operator_status) override {
       frontend.memory_status.registerOperator(operator_status);
       (*frontend.logger) << LogLevel::debug << "Operator "
-                         << operator_status.getName() << " registered.";
-      frontend.logger->flush();
+                         << operator_status.getName() << " registered." << endl;
     }
 
     // virtual void updateOperator(const std::string& op, const status::Tensor&
@@ -5597,18 +7065,15 @@ struct Frontend {
     //     memory_status.updateOperator(op, tensor_status);
     //     // backend_handle->updateOperator(op, tensor_status);
 
-    //     (*logger)<<LogLevel::debug<<"Operator "<<op<<" updated.";
-    //     logger->flush();
+    //     (*logger)<<LogLevel::debug<<"Operator "<<op<<" updated." << endl;
     // }
 
     virtual void setEntry(const std::string& _op) override {
       frontend.memory_status.setEntry(_op);
     }
 
-    virtual void setCallback(
-        CallbackStage stage,
-        const std::function<int(const std::string& tensor, void* ptr)>&
-            callback) override {
+    virtual void setCallback(CallbackStage stage, const Callback& callback)
+        override {
       frontend.executor.setCallback(stage, callback);
       frontend.session.setCallback(stage, callback);
     }
@@ -5619,8 +7084,7 @@ struct Frontend {
       frontend.executor.init();
       frontend.backend_handle->start();
       frontend.impl = &frontend.started_impl;
-      (*frontend.logger) << LogLevel::debug << "Mori started.";
-      frontend.logger->flush();
+      (*frontend.logger) << LogLevel::debug << "Mori started." << endl;
     }
 
     virtual bool isStarted() const noexcept override {
@@ -5629,35 +7093,33 @@ struct Frontend {
 
     virtual MemorySession& getSession() override {
       (*frontend.logger) << LogLevel::error
-                         << "Referencing to session from not-started frontend.";
-      frontend.logger->flush();
+                         << "Referencing to session from not-started frontend."
+                         << endl;
       throw uninited_exception();
     }
 
     virtual void updateSchedule() override {
       (*frontend.logger) << LogLevel::error
-                         << "Updating schedule for not-started frontend.";
-      frontend.logger->flush();
+                         << "Updating schedule for not-started frontend."
+                         << endl;
       throw uninited_exception();
     }
 
     virtual void unregisterTensor(const std::string& tensor) override {
       frontend.memory_status.unregisterTensor(tensor);
       (*frontend.logger) << LogLevel::debug << "Tensor " << tensor
-                         << " unregistered.";
-      frontend.logger->flush();
+                         << " unregistered." << endl;
     }
 
     virtual void unregisterOperator(const std::string& op) override {
       frontend.memory_status.unregisterOperator(op);
       (*frontend.logger) << LogLevel::debug << "Operator " << op
-                         << " unregistered.";
-      frontend.logger->flush();
+                         << " unregistered." << endl;
     }
 
     virtual void stop() override {
-      (*frontend.logger) << LogLevel::error << "Stopping non-started frontend.";
-      frontend.logger->flush();
+      (*frontend.logger) << LogLevel::error << "Stopping non-started frontend."
+                         << endl;
       throw uninited_exception();
     }
 
@@ -5676,21 +7138,20 @@ struct Frontend {
 
     virtual void setMemoryManager(MemoryManager* _mem_manager) override {
       (*frontend.logger) << LogLevel::error
-                         << "Setting memory manager for started frontend.";
-      frontend.logger->flush();
+                         << "Setting memory manager for started frontend."
+                         << endl;
       throw inited_exception();
     }
     virtual void setLogger(Logger* _logger) override {
       (*frontend.logger) << LogLevel::error
-                         << "Setting logger for started frontend.";
-      frontend.logger->flush();
+                         << "Setting logger for started frontend." << endl;
       throw inited_exception();
     }
 
     virtual void init() override {
       (*frontend.logger) << LogLevel::error
-                         << "Initializing frontend that already started.";
-      frontend.logger->flush();
+                         << "Initializing frontend that already started."
+                         << endl;
       throw inited_exception();
     }
     virtual bool isInited() const noexcept override {
@@ -5699,16 +7160,15 @@ struct Frontend {
 
     virtual void registerTensor(const status::Tensor& tensor) override {
       (*frontend.logger) << LogLevel::error << "Registering tensor "
-                         << tensor.getName() << " while frontend started.";
-      frontend.logger->flush();
+                         << tensor.getName() << " while frontend started."
+                         << endl;
       throw inited_exception();
     }
     virtual void registerOperator(
         const status::Operator& operator_status) override {
       (*frontend.logger) << LogLevel::error << "Registering operator "
                          << operator_status.getName()
-                         << " while frontend started.";
-      frontend.logger->flush();
+                         << " while frontend started." << endl;
       throw inited_exception();
     }
 
@@ -5716,31 +7176,26 @@ struct Frontend {
     // tensor_status) {
     //     if (!inited) {
     //         (*logger)<<LogLevel::error<<"Updating operator "<<op<<" while
-    //         frontend not initialized."; logger->flush(); throw
-    //         uninited_exception();
+    //         frontend not initialized." << endl; throw uninited_exception();
     //     }
     // }
 
     virtual void setEntry(const std::string& _op) override {
       (*frontend.logger) << LogLevel::error << "Setting entry operator " << _op
-                         << " while frontend started.";
-      frontend.logger->flush();
+                         << " while frontend started." << endl;
       throw inited_exception();
     }
 
-    virtual void setCallback(
-        CallbackStage stage,
-        const std::function<int(const std::string& tensor, void* ptr)>&
-            callback) override {
+    virtual void setCallback(CallbackStage stage, const Callback& callback)
+        override {
       (*frontend.logger) << LogLevel::error
-                         << "Setting callbacks while frontend started.";
-      frontend.logger->flush();
+                         << "Setting callbacks while frontend started." << endl;
       throw inited_exception();
     }
 
     virtual void start() override {
-      (*frontend.logger) << LogLevel::error << "Frontend already started.";
-      frontend.logger->flush();
+      (*frontend.logger) << LogLevel::error << "Frontend already started."
+                         << endl;
       throw inited_exception();
     }
 
@@ -5762,21 +7217,19 @@ struct Frontend {
 
       frontend.executor.updateSchedule(event_set);
 
-      (*frontend.logger) << LogLevel::debug << "Schedule updated.";
-      frontend.logger->flush();
+      (*frontend.logger) << LogLevel::info
+                         << "Memory swapping schedule updated." << endl;
     }
 
     virtual void unregisterTensor(const std::string& tensor) override {
       (*frontend.logger) << LogLevel::error << "Unregistering tensor " << tensor
-                         << " while frontend not initialized.";
-      frontend.logger->flush();
+                         << " while frontend not initialized." << endl;
       throw uninited_exception();
     }
 
     virtual void unregisterOperator(const std::string& op) override {
       (*frontend.logger) << LogLevel::error << "Unregistering operator " << op
-                         << " while frontend not initialized.";
-      frontend.logger->flush();
+                         << " while frontend not initialized." << endl;
       throw uninited_exception();
     }
 
@@ -5903,10 +7356,7 @@ struct Frontend {
    * @param callback Callback function.
    * @see enum struct mori::CallbackStage
    */
-  inline void setCallback(
-      CallbackStage stage,
-      const std::function<int(const std::string& tensor, void* ptr)>&
-          callback) {
+  inline void setCallback(CallbackStage stage, const Callback& callback) {
     impl->setCallback(stage, callback);
   }
 
@@ -5977,6 +7427,7 @@ struct Frontend {
   ~Frontend() {
     if (impl != &uninited_impl)
       impl->terminate();
+    assert(impl == &uninited_impl);
 
     backend_handle.reset();
     mem_manager = nullptr;

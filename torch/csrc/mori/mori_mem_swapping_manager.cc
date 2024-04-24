@@ -1,6 +1,6 @@
-#include <torch/csrc/autograd/variable.h>
+#pragma once
+// #include <torch/csrc/autograd/variable.h>
 #include <torch/csrc/mori/mori_mem_swapping_manager.hpp>
-// #include "runtime/hardware/device_context_manager.h"
 
 namespace torch {
 
@@ -10,28 +10,20 @@ MoriMemSwappingManager& MoriMemSwappingManager::GetInstance() {
 }
 
 void MoriMemSwappingManager::ClearMoriMemSwappingManager() {
-  for (auto& iter : mori_mem_swapping_managers_) {
-    // MS_LOG(INFO) << "Release mori memory manager for " << iter.first;
-    // MS_EXCEPTION_IF_NULL(iter.second);
-    if (iter.second->isInited())
-      iter.second->terminate();
-  }
-  mori_mem_swapping_managers_.clear();
-  mori_mem_managers_.clear();
+  // MS_LOG(INFO) << "Release mori memory manager for " << iter.first;
+  // MS_EXCEPTION_IF_NULL(iter.second);
+  if (mori_memory_swapping_manager->isInited())
+    mori_memory_swapping_manager->terminate();
+  mori_memory_swapping_manager.reset();
+  pytorch_memory_manager.reset();
 
   tensors_.clear();
 }
 
 mori::MemorySwappingManager* MoriMemSwappingManager::
     GetOrCreateMoriMemSwappingManager(const at::Device& device_context_key) {
-  std::string mori_mem_swapping_manager_key_str = device_context_key.str();
-
-  // Get mori memory swapping manager
-  auto mori_mem_swapping_manager_iter =
-      mori_mem_swapping_managers_.find(mori_mem_swapping_manager_key_str);
-  if (mori_mem_swapping_manager_iter != mori_mem_swapping_managers_.end()) {
-    return mori_mem_swapping_manager_iter->second.get();
-  }
+  if (mori_memory_swapping_manager.get() != nullptr)
+    return mori_memory_swapping_manager.get();
 
   // Create mori memory swapping manager
   mori::Context context;
@@ -54,7 +46,7 @@ mori::MemorySwappingManager* MoriMemSwappingManager::
   context["scheduler.dependency.timeaware"] = "false";
   context["scheduler.dependency.threshold"] = "2";
 
-  auto mori_memory_swapping_manager =
+  mori_memory_swapping_manager =
       std::make_shared<mori::MemorySwappingManager>(context);
   // 修改为pytorch的内存管理器
   // Create mori memory manager
@@ -63,15 +55,10 @@ mori::MemorySwappingManager* MoriMemSwappingManager::
       device::DeviceContextManager::GetInstance()
           .GetOrCreateDeviceContext(device_context_key)
           ->mem_manager();*/
-  auto pytorch_mem_manager = std::make_shared<PytorchMemoryManager>(allocator);
+  pytorch_memory_manager = std::make_shared<PytorchMemoryManager>(allocator);
 
-  mori_mem_swapping_managers_.insert(std::make_pair(
-      mori_mem_swapping_manager_key_str, mori_memory_swapping_manager));
-  mori_mem_managers_.insert(
-      std::make_pair(mori_mem_swapping_manager_key_str, pytorch_mem_manager));
-
-  mori_memory_swapping_manager->setMemoryManager(pytorch_mem_manager.get());
-  // mori_memory_swapping_manager->setLogger(&logger);
+  mori_memory_swapping_manager->setMemoryManager(pytorch_memory_manager.get());
+  // pytorch_mem_manager_->setLogger(&logger);
 
   return mori_memory_swapping_manager.get();
 }

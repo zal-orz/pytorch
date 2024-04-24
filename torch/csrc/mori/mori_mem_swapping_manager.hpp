@@ -1,10 +1,14 @@
 #pragma once
 
-#include <torch/csrc/autograd/variable.h>
+// #include <torch/csrc/autograd/variable.h>
 #include <torch/csrc/mori/mori_mem_manager.hpp>
 #include <atomic>
 #include <memory>
 #include <unordered_map>
+
+namespace at {
+struct Tensor {};
+} // namespace at
 
 namespace torch {
 
@@ -71,20 +75,14 @@ struct MoriMemSwappingManager {
   ~MoriMemSwappingManager() = default;
   C10_DISABLE_COPY_AND_ASSIGN(MoriMemSwappingManager);
 
-  // The string converted from MoriMemSwappingManagerKey ->
-  // MoriMemSwappingManagerPtr.
-  std::unordered_map<std::string, std::shared_ptr<mori::MemorySwappingManager>>
-      mori_mem_swapping_managers_;
-  // The string converted from MoriMemSwappingManagerKey ->
-  // MoriMemSwappingManagerPtr.
-  std::unordered_map<std::string, std::shared_ptr<at::Allocator>>
-      mori_mem_managers_;
+  std::shared_ptr<mori::MemorySwappingManager> mori_memory_swapping_manager;
+  std::shared_ptr<PytorchMemoryManager> pytorch_memory_manager;
 
   std::unordered_map<std::string, std::pair<at::Tensor, size_t>> tensors_;
   std::unordered_map<std::string, mori::status::Operator> operators_;
   std::string output = "";
 
-  std::atomic<int> index = 0;
+  std::atomic<int> index{0};
 
   size_t size_ = 0;
 

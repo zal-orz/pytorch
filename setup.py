@@ -593,6 +593,7 @@ def configure_extension_build():
     if cmake_cache_vars['USE_CUDA']:
         library_dirs.append(
             os.path.dirname(cmake_cache_vars['CUDA_CUDA_LIB']))
+        # os.path.dirname('/usr/local/cuda-10.1/lib64'))
 
     if cmake_cache_vars['USE_NUMPY']:
         extra_install_requires += ['numpy']
