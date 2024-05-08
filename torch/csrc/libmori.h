@@ -129,19 +129,19 @@ struct Logger {
  protected:
   std::unordered_map<std::thread::id, LogLevel> default_levels;
   std::unordered_map<std::thread::id, std::ostringstream> sls;
-  mutable std::shared_mutex dm;
-  mutable std::shared_mutex tm;
+  mutable std::shared_timed_mutex dm;
+  mutable std::shared_timed_mutex tm;
 
   std::ostringstream sg;
   mutable std::mutex sm;
 
   template <typename T>
   void submitInternal(const T& info) {
-    std::shared_lock<std::shared_mutex> l{tm};
+    std::shared_lock<std::shared_timed_mutex> l{tm};
     auto p = sls.find(std::this_thread::get_id());
     if (p == sls.end()) {
       l.unlock();
-      std::unique_lock<std::shared_mutex> lu{tm};
+      std::unique_lock<std::shared_timed_mutex> lu{tm};
       p = sls.emplace(std::this_thread::get_id(), "").first;
       lu.unlock();
       l.lock();
@@ -156,11 +156,11 @@ struct Logger {
 
  public:
   inline void setDefaultLogLevel(LogLevel level) {
-    std::shared_lock<std::shared_mutex> l{dm};
+    std::shared_lock<std::shared_timed_mutex> l{dm};
     auto p = default_levels.find(std::this_thread::get_id());
     if (p == default_levels.end()) {
       l.unlock();
-      std::unique_lock<std::shared_mutex> lu{dm};
+      std::unique_lock<std::shared_timed_mutex> lu{dm};
       p = default_levels.emplace(std::this_thread::get_id(), level).first;
       lu.unlock();
       l.lock();
@@ -168,7 +168,7 @@ struct Logger {
     default_levels.at(std::this_thread::get_id()) = level;
   }
   inline LogLevel getDefaultLogLevel() const {
-    std::shared_lock<std::shared_mutex> l{dm};
+    std::shared_lock<std::shared_timed_mutex> l{dm};
     auto p = default_levels.find(std::this_thread::get_id());
     if (p == default_levels.end())
       return LogLevel::debug;
@@ -178,7 +178,7 @@ struct Logger {
   void flush(LogLevel level) {
     std::unique_lock<std::mutex> ls{sm};
 
-    std::shared_lock<std::shared_mutex> lt{tm};
+    std::shared_lock<std::shared_timed_mutex> lt{tm};
     auto& sl = sls[std::this_thread::get_id()];
     lt.unlock();
 
@@ -227,7 +227,7 @@ struct Logger {
     sg.str("");
     ls.unlock();
 
-    std::unique_lock<std::shared_mutex> lt{tm};
+    std::unique_lock<std::shared_timed_mutex> lt{tm};
     sls.clear();
     lt.unlock();
   }
@@ -911,7 +911,7 @@ struct MemoryRegion final {
 struct Block final {
   MemoryBlockType type;
   std::map<void*, MemoryRegion> regions;
-  mutable std::shared_mutex m;
+  mutable std::shared_timed_mutex m;
   size_t total_size;
 
   Block(MemoryBlockType block_type, void* address, size_t size) {
@@ -942,7 +942,7 @@ struct MemoryLayout final {
 
  private:
   std::map<void*, Block> blocks;
-  // std::shared_mutex m;
+  // std::shared_timed_mutex m;
 
   size_t align_size;
 
@@ -996,7 +996,7 @@ struct MemoryLayout final {
     auto bp = locateMemoryBlock(address);
     if (bp == blocks.end())
       return false;
-    std::shared_lock<std::shared_mutex> l{bp->second.m};
+    std::shared_lock<std::shared_timed_mutex> l{bp->second.m};
     auto& regions = bp->second.regions;
     if (direction == Direction::post)
       return regions.find(address) != regions.end();
@@ -1011,7 +1011,7 @@ struct MemoryLayout final {
     auto bp = locateMemoryBlock(address);
     if (bp == blocks.end())
       throw memory_unmanaged();
-    std::shared_lock<std::shared_mutex> l{bp->second.m};
+    std::shared_lock<std::shared_timed_mutex> l{bp->second.m};
     auto& regions = bp->second.regions;
     auto sp = regions.find(address);
     if (direction == Direction::post) {
@@ -1031,7 +1031,7 @@ struct MemoryLayout final {
     auto bp = locateMemoryBlock(address);
     if (bp == blocks.end())
       throw memory_unmanaged();
-    std::shared_lock<std::shared_mutex> l{bp->second.m};
+    std::shared_lock<std::shared_timed_mutex> l{bp->second.m};
     return bp->second.type == MemoryBlockType::persistent;
   }
   bool isTransient(void* address) const {
@@ -1040,7 +1040,7 @@ struct MemoryLayout final {
     auto bp = locateMemoryBlock(address);
     if (bp == blocks.end())
       throw memory_unmanaged();
-    std::shared_lock<std::shared_mutex> l{bp->second.m};
+    std::shared_lock<std::shared_timed_mutex> l{bp->second.m};
     return bp->second.type == MemoryBlockType::transient;
   }
   bool isCommon(void* address) const {
@@ -1049,7 +1049,7 @@ struct MemoryLayout final {
     auto bp = locateMemoryBlock(address);
     if (bp == blocks.end())
       throw memory_unmanaged();
-    std::shared_lock<std::shared_mutex> l{bp->second.m};
+    std::shared_lock<std::shared_timed_mutex> l{bp->second.m};
     return bp->second.type == MemoryBlockType::common;
   }
 
@@ -1069,7 +1069,7 @@ struct MemoryLayout final {
     assert(bp != blocks.begin());
     --bp;
 
-    std::unique_lock<std::shared_mutex> l{bp->second.m};
+    std::unique_lock<std::shared_timed_mutex> l{bp->second.m};
     auto& regions = bp->second.regions;
     auto p = regions.begin();
     while (p != regions.end() &&
@@ -1128,7 +1128,7 @@ struct MemoryLayout final {
     if (bp == blocks.end())
       throw memory_not_allocated(address);
 
-    std::unique_lock<std::shared_mutex> l{bp->second.m};
+    std::unique_lock<std::shared_timed_mutex> l{bp->second.m};
     auto& regions = bp->second.regions;
     // Check if allocated device memory.
     auto p = regions.find(address);
@@ -1162,7 +1162,7 @@ struct MemoryLayout final {
     if (bp == blocks.end())
       throw memory_not_allocated(address);
 
-    std::unique_lock<std::shared_mutex> l{bp->second.m};
+    std::unique_lock<std::shared_timed_mutex> l{bp->second.m};
     auto& regions = bp->second.regions;
     auto p = regions.find(address);
     if (p == regions.end() || !p->second.allocated)
@@ -1184,7 +1184,7 @@ struct MemoryLayout final {
     if (bp == blocks.end())
       throw memory_not_allocated(left);
 
-    std::unique_lock<std::shared_mutex> l{bp->second.m};
+    std::unique_lock<std::shared_timed_mutex> l{bp->second.m};
     auto& regions = bp->second.regions;
     auto q = regions.find(left);
     if (q == regions.end() || !q->second.allocated)
@@ -1939,7 +1939,7 @@ struct Operator final {
   // Tensors consisting of this operator.
   std::unordered_set<std::string> tensors;
 
-  // std::shared_mutex m;
+  // std::shared_timed_mutex m;
 
   // Indicate if the operator is a backward propagation operator.
   bool backward_propagation = false;
@@ -2058,10 +2058,10 @@ struct TensorPres final {
 
  private:
   Tensor& status;
-  std::unique_lock<std::shared_mutex> l;
+  std::unique_lock<std::shared_timed_mutex> l;
 
-  TensorPres(Tensor& _status, std::shared_mutex& m) : status(_status) {
-    l = std::unique_lock<std::shared_mutex>{m, std::try_to_lock};
+  TensorPres(Tensor& _status, std::shared_timed_mutex& m) : status(_status) {
+    l = std::unique_lock<std::shared_timed_mutex>{m, std::try_to_lock};
   }
 
  public:
@@ -2231,10 +2231,11 @@ struct OperatorPres final {
  private:
   Operator& status;
   // Operator is read-only during DL processing.
-  std::unique_lock<std::shared_mutex> l;
+  std::unique_lock<std::shared_timed_mutex> l;
 
-  OperatorPres(Operator& _status, std::shared_mutex& m) : status(_status) {
-    l = std::unique_lock<std::shared_mutex>(m, std::try_to_lock);
+  OperatorPres(Operator& _status, std::shared_timed_mutex& m)
+      : status(_status) {
+    l = std::unique_lock<std::shared_timed_mutex>(m, std::try_to_lock);
   }
 
  public:
@@ -2282,7 +2283,7 @@ struct MemoryStatus final {
   struct View final {
     T pres;
 
-    View(typename T::target_type& _target, std::shared_mutex& m)
+    View(typename T::target_type& _target, std::shared_timed_mutex& m)
         : pres(_target, m) {}
 
     inline bool isReferenced() {
@@ -2298,7 +2299,7 @@ struct MemoryStatus final {
   template <typename T>
   struct Hold {
     T target;
-    std::shared_mutex m;
+    std::shared_timed_mutex m;
     Hold(const T& _target) : target(_target) {}
     Hold(T&& _target) : target(_target) {}
     Hold(const Hold& _hold) : target(_hold.target) {}
@@ -2322,7 +2323,7 @@ struct MemoryStatus final {
   std::string operator_entry = "";
 
   // Protect the status map.
-  // std::shared_mutex tm, om;
+  // std::shared_timed_mutex tm, om;
 
   MemoryInfo memory_info;
 
@@ -2330,8 +2331,8 @@ struct MemoryStatus final {
   MemoryStatus() = default;
   MemoryStatus(const MemoryStatus& _status) = default;
   MemoryStatus(MemoryStatus&& _status) {
-    // std::unique_lock<std::shared_mutex> tl{_status.tm};
-    // std::unique_lock<std::shared_mutex> ol{_status.om};
+    // std::unique_lock<std::shared_timed_mutex> tl{_status.tm};
+    // std::unique_lock<std::shared_timed_mutex> ol{_status.om};
     tensor_statuses = std::move(_status.tensor_statuses);
     operator_statuses = std::move(_status.operator_statuses);
     execution_order = std::move(_status.execution_order);
@@ -2341,8 +2342,8 @@ struct MemoryStatus final {
 
   MemoryStatus& operator=(const MemoryStatus& _status) = default;
   MemoryStatus& operator=(MemoryStatus&& _status) {
-    // std::unique_lock<std::shared_mutex> tl{_status.tm};
-    // std::unique_lock<std::shared_mutex> ol{_status.om};
+    // std::unique_lock<std::shared_timed_mutex> tl{_status.tm};
+    // std::unique_lock<std::shared_timed_mutex> ol{_status.om};
     tensor_statuses = std::move(_status.tensor_statuses);
     operator_statuses = std::move(_status.operator_statuses);
     execution_order = std::move(_status.execution_order);
@@ -2365,7 +2366,7 @@ struct MemoryStatus final {
    * @param status tensorStatus
    */
   void registerTensor(const Tensor& status) {
-    // std::unique_lock<std::shared_mutex> l{tm};
+    // std::unique_lock<std::shared_timed_mutex> l{tm};
 
     auto p = tensor_statuses.find(status.getName());
     if (p != tensor_statuses.end())
@@ -2380,7 +2381,7 @@ struct MemoryStatus final {
    * @param tensor tensor name
    */
   void registerTensor(const std::string& tensor) {
-    // std::unique_lock<std::shared_mutex> l{tm};
+    // std::unique_lock<std::shared_timed_mutex> l{tm};
 
     auto p = tensor_statuses.find(tensor);
     if (p != tensor_statuses.end())
@@ -2397,7 +2398,7 @@ struct MemoryStatus final {
    * @param status operator status
    */
   void registerOperator(const Operator& status) {
-    // std::unique_lock<std::shared_mutex> l{om};
+    // std::unique_lock<std::shared_timed_mutex> l{om};
 
     auto p = operator_statuses.find(status.getName());
     if (p != operator_statuses.end())
@@ -2533,7 +2534,7 @@ struct MemoryStatus final {
   }
 
   void unregisterOperator(const std::string& op) {
-    // std::unique_lock<std::shared_mutex> l{om};
+    // std::unique_lock<std::shared_timed_mutex> l{om};
 
     auto p = operator_statuses.find(op);
     if (p == operator_statuses.end())
@@ -2552,7 +2553,7 @@ struct MemoryStatus final {
    * @param tensor tensor name
    */
   void unregisterTensor(const std::string& tensor) {
-    // std::unique_lock<std::shared_mutex> l{tm};
+    // std::unique_lock<std::shared_timed_mutex> l{tm};
 
     auto p = tensor_statuses.find(tensor);
     if (p == tensor_statuses.end())
@@ -3665,7 +3666,8 @@ struct TimeModel final {
         }
       }
       Timespan timespan(synchronization_label, 0);
-      auto& target = timespans.emplace_back(synchronization_label, timespan);
+      timespans.push_back(std::make_pair(synchronization_label, timespan));
+      auto& target = timespans.back();
       target.second.synchronization = true;
       current_synchronization_label = synchronization_label;
     }
@@ -3808,7 +3810,7 @@ struct MemoryScheduler {
 
   events::ScheduleEvents schedule_events;
 
-  std::atomic<int> current_iteration = 0;
+  std::atomic<int> current_iteration{0};
 
  protected:
   /**
@@ -4480,8 +4482,8 @@ struct BasicBackend final : public Backend {
   std::unique_ptr<exporter::ScheduleExporter> schedule_exporter;
   void* schedule_exporter_hinst = nullptr;
 
-  std::atomic<bool> inited = false;
-  std::atomic<bool> started = false;
+  std::atomic<bool> inited{false};
+  std::atomic<bool> started{false};
 
   // Scheduling information
   std::thread scheduler_thread;
@@ -5582,7 +5584,7 @@ struct Presentation final {
   PresentationFunctionType require_func;
   PresentationFunctionType release_func;
 
-  std::atomic<bool> presented = false;
+  std::atomic<bool> presented{false};
 
  public:
   Presentation(T& _target) : target(_target) {
@@ -5632,14 +5634,14 @@ struct MemoryScheduleExecutor final {
   std::weak_ptr<BackendHandle> backend_handle;
 
   // Schedule information
-  std::shared_mutex events_m;
+  std::shared_timed_mutex events_m;
   events::StageScheduleEvents forward_schedule_events;
   events::StageScheduleEvents backward_schedule_events;
   std::atomic<events::StageScheduleEvents*> current_eventset;
-  std::shared_mutex events_mutex;
+  std::shared_timed_mutex events_mutex;
 
   std::mutex new_events_m;
-  std::atomic<bool> events_updated = false;
+  std::atomic<bool> events_updated{false};
   events::ScheduleEvents new_events;
 
   // Executor thread
@@ -5653,12 +5655,12 @@ struct MemoryScheduleExecutor final {
   std::mutex exec_sync_mutex;
   std::chrono::steady_clock::time_point exec_sync_time_offset;
 
-  std::atomic<bool> half_iter_sync = false;
-  std::atomic<bool> iter_sync = false;
-  std::atomic<bool> exec_sync = false;
-  std::atomic<bool> next_op_sync = false;
+  std::atomic<bool> half_iter_sync{false};
+  std::atomic<bool> iter_sync{false};
+  std::atomic<bool> exec_sync{false};
+  std::atomic<bool> next_op_sync{false};
 
-  std::atomic<int> iteration = 0;
+  std::atomic<int> iteration{0};
 
   // The schedule events are ordered.
   // The operator-triggered events are ordered by the execution sequence of
@@ -5669,7 +5671,7 @@ struct MemoryScheduleExecutor final {
 
   MemoryOperationExecutor executor;
 
-  std::atomic<bool> inited = false;
+  std::atomic<bool> inited{false};
 
   // Time-triggered events require these methods to reset the schedule timepoint
   // offset.
@@ -5694,7 +5696,7 @@ struct MemoryScheduleExecutor final {
   void activateEvents() {
     std::vector<events::ScheduleEvent>& eventset =
         current_eventset.load()->timepoint;
-    std::shared_lock<std::shared_mutex> l{events_mutex};
+    std::shared_lock<std::shared_timed_mutex> l{events_mutex};
 
     // Activate timepoint triggered events.
     // Execution triggered events do not need to be activated here.
@@ -5857,7 +5859,7 @@ struct MemoryScheduleExecutor final {
       while (inited) {
         // Examine if synchronization required.
         if (half_iter_sync) {
-          std::shared_lock<std::shared_mutex> em{events_m};
+          std::shared_lock<std::shared_timed_mutex> em{events_m};
           assert(current_eventset.load() == &this->forward_schedule_events);
           current_eventset.store(&this->backward_schedule_events);
           resetExecution();
@@ -5865,7 +5867,7 @@ struct MemoryScheduleExecutor final {
         }
         if (iter_sync) {
           if (events_updated) {
-            std::unique_lock<std::shared_mutex> em_n{events_m};
+            std::unique_lock<std::shared_timed_mutex> em_n{events_m};
             std::unique_lock<std::mutex> nem{new_events_m};
 
             this->forward_schedule_events =
@@ -5878,7 +5880,7 @@ struct MemoryScheduleExecutor final {
             events_updated = false;
           }
 
-          std::shared_lock<std::shared_mutex> em{events_m};
+          std::shared_lock<std::shared_timed_mutex> em{events_m};
           current_eventset.store(&this->forward_schedule_events);
           resetExecution();
           iter_sync = false;
@@ -6080,7 +6082,7 @@ struct MemoryDefragmentationExecutor {
   std::map<size_t, std::set<void*>> allocated_regions;
   std::map<size_t, std::set<void*>> idle_regions;
 
-  std::shared_mutex m;
+  std::shared_timed_mutex m;
 
  protected:
   void performCopyDevice(void* src, void* dst, size_t size) {
@@ -6162,7 +6164,7 @@ struct MemoryDefragmentationExecutor {
       throw memory_unmanaged();
     MemoryRegion region = layout.getMemoryRegion(address);
 
-    std::unique_lock<std::shared_mutex> l{m};
+    std::unique_lock<std::shared_timed_mutex> l{m};
 
     assert(allocated_regions[region.size].count(address) == 0);
     assert(idle_regions[region.size].count(address) == 1);
@@ -6176,7 +6178,7 @@ struct MemoryDefragmentationExecutor {
       throw memory_unmanaged();
     MemoryRegion region = layout.getMemoryRegion(address);
 
-    std::unique_lock<std::shared_mutex> l{m};
+    std::unique_lock<std::shared_timed_mutex> l{m};
 
     assert(allocated_regions[region.size].count(address) == 1);
     assert(idle_regions[region.size].count(address) == 0);
@@ -6208,7 +6210,7 @@ struct MemoryDefragmentationExecutor {
         });
     assert(bp != layout.blocks.end());
 
-    std::unique_lock<std::shared_mutex> l{bp->second.m};
+    std::unique_lock<std::shared_timed_mutex> l{bp->second.m};
     auto& regions = bp->second.regions;
 
     for (auto p = regions.begin(); p != regions.end(); ++p) {
@@ -6269,8 +6271,8 @@ struct MemorySession final {
     ApplicationStage stage;
 
     std::unordered_map<std::string, status::TensorPres> requested_tensors;
-    std::atomic<bool> waiting = true;
-    std::atomic<bool> executing = false;
+    std::atomic<bool> waiting{true};
+    std::atomic<bool> executing{false};
 
     /**
      * isTensorWaited

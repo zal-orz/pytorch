@@ -52,6 +52,11 @@
 #include <torch/csrc/utils/init.h>
 #include <torch/csrc/api/include/torch/python/init.h>
 
+#include <c10/cuda/CUDAFunctions.h>
+#include <cuda_runtime_api.h>
+#include <torch/csrc/mori_mem_manager.h>
+#include <torch/csrc/mori_mem_swapping_manager.h>
+
 #ifdef USE_DISTRIBUTED
 #ifdef USE_C10D
 #include <torch/csrc/distributed/autograd/python_autograd.h>
@@ -737,6 +742,23 @@ PyObject* initModule() {
   torch::autograd::initLinalgFunctions(module);
   torch::autograd::init_legacy_variable(module);
   torch::python::init_bindings(module);
+
+  // Initialize mori
+  c10::DeviceIndex device_id = c10::cuda::current_device();
+  // cudaDeviceProp prop;
+  // cudaGetDeviceProperties(&prop, device_id);
+  // std::string device_name = prop.name;
+  at::Device device(c10::DeviceType::CUDA, device_id);
+  const auto& mori_memory_manager =
+      torch::mori_mem_swapping_manager.GetOrCreateMoriMemSwappingManager(
+          device);
+  try {
+    mori_memory_manager->init();
+  } catch (std::exception& e) {
+    std::cerr << "Failed to initialize mori memory manager: " << e.what()
+              << std::endl;
+  }
+
 #ifdef USE_CUDA
   torch::cuda::initModule(module);
 #endif

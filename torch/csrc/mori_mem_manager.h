@@ -7,7 +7,7 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <cuda_runtime_api.h>
 #include <stdio.h>
-#include "libmori.hpp"
+#include "libmori.h"
 // #include "plugin/device/gpu/hal/device/cuda_driver.h"
 // #include "plugin/device/gpu/hal/device/gpu_device_manager.h"
 // #include "runtime/device/memory_manager.h"
@@ -36,7 +36,7 @@ struct PytorchMemoryManager : public mori::MemoryManager {
 
   bool pinned_mem_enabled = false;
 
-  std::shared_mutex hm;
+  std::shared_timed_mutex hm;
 
   // void* stream;
   CUstream stream;
@@ -105,7 +105,7 @@ struct PytorchMemoryManager : public mori::MemoryManager {
     if (aligned_size == 0)
       aligned_size = MORI_HOST_MEM_ALIGN_SIZE;
 
-    std::unique_lock<std::shared_mutex> l{hm};
+    std::unique_lock<std::shared_timed_mutex> l{hm};
 
     auto iter = hosts_idle.lower_bound(aligned_size);
     if (iter == hosts_idle.end())
@@ -129,7 +129,7 @@ struct PytorchMemoryManager : public mori::MemoryManager {
       override {
     if (size == 0)
       return;
-    std::shared_lock<std::shared_mutex> l{hm};
+    std::shared_lock<std::shared_timed_mutex> l{hm};
     /*if
     (!device::gpu::GPUDeviceManager::GetInstance().CopyHostMemToDeviceAsync(
             device_address, host_address, size, stream)) {
@@ -141,15 +141,11 @@ struct PytorchMemoryManager : public mori::MemoryManager {
       MS_EXCEPTION(DeviceProcessError)
           << "Copy in CUDA memcpy failed: Stream synchronization failed.";
     }*/
-cudaError_t err = cudaMemcpyAsync(
-    device_address,
-    host_address,
-    size,
-    cudaMemcpyHostToDevice,
-    stream);
-if (err != cudaSuccess) {
-  std::cout << "Copy in CUDA memcpy failed" << std::endl;
-  return;
+    cudaError_t err = cudaMemcpyAsync(
+        device_address, host_address, size, cudaMemcpyHostToDevice, stream);
+    if (err != cudaSuccess) {
+      std::cout << "Copy in CUDA memcpy failed" << std::endl;
+      return;
     }
     err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {
@@ -162,7 +158,7 @@ if (err != cudaSuccess) {
       override {
     if (size == 0)
       return;
-    std::shared_lock<std::shared_mutex> l{hm};
+    std::shared_lock<std::shared_timed_mutex> l{hm};
     /*if
     (!device::gpu::GPUDeviceManager::GetInstance().CopyDeviceMemToHostAsync(
             host_address, device_address, size, stream)) {
@@ -192,7 +188,7 @@ if (err != cudaSuccess) {
   }
 
   virtual void freeHost(void* address) {
-    std::unique_lock<std::shared_mutex> l{hm};
+    std::unique_lock<std::shared_timed_mutex> l{hm};
 
     auto p = hosts.find(address);
     if (p == hosts.end() || !p->second.allocated)
@@ -308,8 +304,6 @@ if (err != cudaSuccess) {
     }
     // device::gpu::GPUDeviceManager::GetInstance().DestroyStream(&stream);
   }
-  }
-  ; // struct MindSporeMemoryManager
+}; // struct MindSporeMemoryManager
 
-  } // namespace torch
-  
+} // namespace torch

@@ -731,6 +731,7 @@ include_directories(BEFORE ${PROJECT_BINARY_DIR}/aten/src/)
 # ---[ Main build
 add_subdirectory(c10)
 add_subdirectory(caffe2)
+#add_subdirectory(mori)
 
 # --[ Documentation
 if(BUILD_DOCS)

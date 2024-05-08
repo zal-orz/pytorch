@@ -17,6 +17,8 @@ if(USE_TBB)
 include_directories(${TBB_ROOT_DIR}/include)
 endif()
 
+include_directories(${TORCH_SRC_DIR}/csrc/)
+
 set(TORCH_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(TORCH_ROOT "${TORCH_SRC_DIR}/..")
 
@@ -33,7 +35,6 @@ endif()
 set(LIBSHM_SRCDIR ${TORCH_SRC_DIR}/lib/${LIBSHM_SUBDIR})
 add_subdirectory(${LIBSHM_SRCDIR})
 
-
 # Generate files
 set(TOOLS_PATH "${TORCH_ROOT}/tools")
 
@@ -41,6 +42,10 @@ set(TOOLS_PATH "${TORCH_ROOT}/tools")
 set(TORCH_PYTHON_SRCS
     ${GENERATED_THNN_CXX}
     ${GENERATED_CXX_PYTHON}
+    ${TORCH_SRC_DIR}/csrc/libmori.h
+    ${TORCH_SRC_DIR}/csrc/mori_mem_manager.h
+    ${TORCH_SRC_DIR}/csrc/mori_mem_swapping_manager.h
+    ${TORCH_SRC_DIR}/csrc/mori_mem_swapping_manager.cpp
     )
 append_filelist("libtorch_python_core_sources" TORCH_PYTHON_SRCS)
 
