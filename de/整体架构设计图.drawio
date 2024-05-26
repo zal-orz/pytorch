@@ -1,9 +1,88 @@
-<mxfile host="app.diagrams.net" modified="2024-05-26T06:17:47.985Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" version="24.4.8" etag="h2edY1hDqrC1u1LlHSS5" type="github">
+<mxfile host="app.diagrams.net" modified="2024-05-26T06:43:52.659Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" etag="QzC3oDRy53ECG0HOny_a" version="24.4.8" type="github">
   <diagram name="第 1 页" id="qcYdRjg96rGkabj2Buc9">
-    <mxGraphModel>
+    <mxGraphModel dx="989" dy="514" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-1" value="数据收集注册模块" style="swimlane;" vertex="1" parent="1">
+          <mxGeometry x="70" y="180" width="220" height="440" as="geometry">
+            <mxRectangle x="70" y="180" width="140" height="30" as="alternateBounds" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="E-YUIBhsLcnsbrqLwlZX-1" source="E-YUIBhsLcnsbrqLwlZX-5" target="E-YUIBhsLcnsbrqLwlZX-7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-5" value="深度学习框架" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="E-YUIBhsLcnsbrqLwlZX-1">
+          <mxGeometry x="50" y="50" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="E-YUIBhsLcnsbrqLwlZX-1" source="E-YUIBhsLcnsbrqLwlZX-7" target="E-YUIBhsLcnsbrqLwlZX-9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-7" value="张量和算子数据" style="shape=parallelogram;html=1;strokeWidth=2;perimeter=parallelogramPerimeter;whiteSpace=wrap;rounded=1;arcSize=12;size=0.23;" vertex="1" parent="E-YUIBhsLcnsbrqLwlZX-1">
+          <mxGeometry x="40" y="140" width="130" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-9" value="初始化并注册数据" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="E-YUIBhsLcnsbrqLwlZX-1">
+          <mxGeometry x="45" y="240" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-13" value="张量和算子信息数据库" style="strokeWidth=2;html=1;shape=mxgraph.flowchart.database;whiteSpace=wrap;" vertex="1" parent="E-YUIBhsLcnsbrqLwlZX-1">
+          <mxGeometry x="57.5" y="330" width="95" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="E-YUIBhsLcnsbrqLwlZX-1" source="E-YUIBhsLcnsbrqLwlZX-9" target="E-YUIBhsLcnsbrqLwlZX-13">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-2" value="换入换出方案决策模块" style="swimlane;" vertex="1" parent="1">
+          <mxGeometry x="290" y="180" width="220" height="440" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="E-YUIBhsLcnsbrqLwlZX-2" source="E-YUIBhsLcnsbrqLwlZX-11" target="E-YUIBhsLcnsbrqLwlZX-16">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-11" value="离线分析张量和算子信息" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="E-YUIBhsLcnsbrqLwlZX-2">
+          <mxGeometry x="50" y="50" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-19" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="E-YUIBhsLcnsbrqLwlZX-2" source="E-YUIBhsLcnsbrqLwlZX-16" target="E-YUIBhsLcnsbrqLwlZX-18">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-16" value="构建分层图模型" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="E-YUIBhsLcnsbrqLwlZX-2">
+          <mxGeometry x="50" y="140" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-18" value="生成换入换出决策方案" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="E-YUIBhsLcnsbrqLwlZX-2">
+          <mxGeometry x="50" y="240" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-3" value="决策方案执行模块" style="swimlane;" vertex="1" parent="1">
+          <mxGeometry x="510" y="180" width="220" height="440" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-26" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="E-YUIBhsLcnsbrqLwlZX-3" source="E-YUIBhsLcnsbrqLwlZX-22" target="E-YUIBhsLcnsbrqLwlZX-23">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-22" value="记录张量显存地址信息" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="E-YUIBhsLcnsbrqLwlZX-3">
+          <mxGeometry x="50" y="50" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-27" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="E-YUIBhsLcnsbrqLwlZX-3" source="E-YUIBhsLcnsbrqLwlZX-23" target="E-YUIBhsLcnsbrqLwlZX-24">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-23" value="分配内存空间" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="E-YUIBhsLcnsbrqLwlZX-3">
+          <mxGeometry x="50" y="140" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-24" value="根据决策方案，主动执行内存交换" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="E-YUIBhsLcnsbrqLwlZX-3">
+          <mxGeometry x="50" y="240" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="E-YUIBhsLcnsbrqLwlZX-13" target="E-YUIBhsLcnsbrqLwlZX-11">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="300" y="550" />
+              <mxPoint x="300" y="260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="E-YUIBhsLcnsbrqLwlZX-25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="E-YUIBhsLcnsbrqLwlZX-18" target="E-YUIBhsLcnsbrqLwlZX-22">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="400" y="500" />
+              <mxPoint x="520" y="500" />
+              <mxPoint x="520" y="260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
